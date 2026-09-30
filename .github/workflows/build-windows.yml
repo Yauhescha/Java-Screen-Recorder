@@ -48,10 +48,18 @@ jobs:
             throw "AppVersion.java not found: $path"
           }
 
-          $content = Get-Content $path -Raw
+          # Windows PowerShell 5.1 writes UTF-8 with BOM when using
+          # Set-Content -Encoding utf8. javac rejects that BOM here.
+          $content = [System.IO.File]::ReadAllText($path)
+          $content = $content.TrimStart([char]0xFEFF)
+
           $replacement = 'public static final String VERSION = "' + $env:BUILD_VERSION + '";'
           $updated = $content -replace 'public static final String VERSION = "[^"]+";', $replacement
-          Set-Content -Path $path -Value $updated -Encoding utf8
+
+          $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+          [System.IO.File]::WriteAllText($path, $updated, $utf8NoBom)
+
+          Write-Host "AppVersion.java synchronized to $env:BUILD_VERSION using UTF-8 without BOM."
 
       - name: Prepare optional signing certificate
         shell: powershell
@@ -118,11 +126,3 @@ jobs:
         run: |
           $tag = "v$env:BUILD_VERSION"
           gh release view $tag --repo "${{ github.repository }}" *> $null
-
-          if ($LASTEXITCODE -eq 0) {
-            Write-Host "Release $tag already exists."
-            "publish=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-          }
-          else {
-            Write-Host "Release $tag does not exist and will be created."
-            "publish=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
