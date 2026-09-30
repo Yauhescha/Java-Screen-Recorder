@@ -125,4 +125,4 @@ jobs:
           BUILD_VERSION: ${{ steps.version.outputs.version }}
         run: |
           $tag = "v$env:BUILD_VERSION"
-          gh release view $tag --repo "${{ github.repository }}" *> $null
+          $repo = "${{ github.repository }}"
