@@ -113,13 +113,16 @@ jobs:
       - name: Build summary
         if: always()
         shell: powershell
+        env:
+          BUILD_VERSION: ${{ steps.version.outputs.version }}
+          BUILD_REF: ${{ github.ref }}
         run: |
-          Add-Content $env:GITHUB_STEP_SUMMARY "## Java Screen Recorder build"
-          Add-Content $env:GITHUB_STEP_SUMMARY ""
-          Add-Content $env:GITHUB_STEP_SUMMARY "- Version: `${{ steps.version.outputs.version }}`"
-          Add-Content $env:GITHUB_STEP_SUMMARY "- Ref: `${{ github.ref }}`"
-          if ("${{ github.ref }}" -like "refs/tags/*") {
-            Add-Content $env:GITHUB_STEP_SUMMARY "- Public GitHub Release: **yes**"
+          "## Java Screen Recorder build" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "- Version: $env:BUILD_VERSION" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "- Ref: $env:BUILD_REF" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          if ($env:BUILD_REF -like "refs/tags/*") {
+            "- Public GitHub Release: **yes**" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
           } else {
-            Add-Content $env:GITHUB_STEP_SUMMARY "- Public GitHub Release: **no** (push a matching `vX.Y.Z` tag to publish)"
+            "- Public GitHub Release: **no** (push a matching vX.Y.Z tag to publish)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
           }
