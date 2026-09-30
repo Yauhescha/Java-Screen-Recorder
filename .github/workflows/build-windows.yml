@@ -60,8 +60,6 @@ jobs:
           $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
           [System.IO.File]::WriteAllText($path, $updated, $utf8NoBom)
 
-          Write-Host "AppVersion.java synchronized to $env:BUILD_VERSION"
-
       - name: Prepare optional signing certificate
         shell: powershell
         env:
@@ -79,7 +77,6 @@ jobs:
           )
 
           "JSR_SIGN_PFX=$pfxPath" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          Write-Host "Signing certificate prepared."
 
       - name: Build ZIP and update.json
         shell: powershell
@@ -112,9 +109,6 @@ jobs:
             throw "update.json not found: $manifest"
           }
 
-          Write-Host "Release ZIP: $zip"
-          Write-Host "Update manifest: $manifest"
-
       - name: Upload Actions artifact
         uses: actions/upload-artifact@v5
         with:
@@ -125,4 +119,28 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Publish GitHub Release if this version is new
+      - name: Create or update GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          name: Java Screen Recorder ${{ steps.version.outputs.version }}
+          target_commitish: ${{ github.sha }}
+          make_latest: true
+          generate_release_notes: true
+          overwrite_files: true
+          fail_on_unmatched_files: true
+          files: |
+            release-out/JavaScreenRecorder-${{ steps.version.outputs.version }}-win-x64.zip
+            release-out/update.json
+
+      - name: Build summary
+        if: always()
+        shell: powershell
+        env:
+          BUILD_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          "## Java Screen Recorder build" | Out-File $env:GITHUB_STEP_SUMMARY -Encoding utf8
+          "" | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "- Version: $env:BUILD_VERSION" | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "- Release tag: v$env:BUILD_VERSION" | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "- Assets: ZIP + update.json" | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
