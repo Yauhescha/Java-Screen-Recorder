@@ -108,7 +108,7 @@ jobs:
           }
 
       - name: Upload Actions artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: JavaScreenRecorder-${{ steps.version.outputs.version }}-${{ github.sha }}
           path: |
@@ -117,8 +117,8 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Check existing GitHub Release
-        id: release_check
+      - name: Publish GitHub Release when version is new
+        id: publish
         shell: powershell
         env:
           GH_TOKEN: ${{ github.token }}
