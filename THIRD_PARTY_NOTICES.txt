@@ -1,0 +1,11 @@
+Java Screen Recorder can bundle FFmpeg for Windows.
+
+The supplied build script downloads the "release essentials" Windows build from:
+https://www.gyan.dev/ffmpeg/builds/
+
+At the time this project was prepared, that build is distributed under GPLv3 and
+includes libx264. If you redistribute a binary package containing that FFmpeg build,
+you are responsible for complying with the corresponding FFmpeg/build/library licenses.
+
+FFmpeg project: https://ffmpeg.org/
+FFmpeg source: https://github.com/FFmpeg/FFmpeg

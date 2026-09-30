@@ -1,0 +1,8 @@
+{
+  "version": "0.10.0",
+  "packageUrl": "https://github.com/Yauhescha/Java-Screen-Recorder/releases/download/v0.10.0/JavaScreenRecorder-0.10.0-win-x64.zip",
+  "packageType": "zip",
+  "sha256": "ZIP_SHA256",
+  "entryExe": "JavaScreenRecorder/JavaScreenRecorder.exe",
+  "notes": "Release notes"
+}

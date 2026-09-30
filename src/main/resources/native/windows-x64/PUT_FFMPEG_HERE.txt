@@ -1,0 +1,9 @@
+This directory is populated automatically by scripts/prepare-ffmpeg.ps1.
+
+The build script downloads the Windows x64 FFmpeg release essentials ZIP,
+extracts ffmpeg.exe, and packages it as a JAR resource.
+
+At application startup:
+1. a compatible system FFmpeg is preferred;
+2. otherwise an existing ffmpeg.exe next to JavaScreenRecorder.exe is used;
+3. otherwise this embedded resource is extracted next to JavaScreenRecorder.exe.

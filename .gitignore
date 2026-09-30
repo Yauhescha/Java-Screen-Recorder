@@ -1,0 +1,17 @@
+target/
+.idea/
+*.iml
+/dist/
+# Downloaded FFmpeg binaries
+src/main/resources/native/windows-x64/ffmpeg.exe
+src/main/resources/native/windows-x64/ffprobe.exe
+
+# Temporary FFmpeg downloads
+.ffmpeg-cache/
+downloads/
+
+# Build results
+target/
+dist/
+dist-installer/
+release-build/
