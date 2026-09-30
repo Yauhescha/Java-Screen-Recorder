@@ -133,3 +133,18 @@ The older `jpackage + WiX` installer pipeline is still available through `build-
 ## FFmpeg licensing
 
 Review `THIRD_PARTY_NOTICES.txt` and the license of the exact FFmpeg build before public or commercial redistribution.
+
+## GitHub Actions publication behavior
+
+Every push to `main` builds a Windows ZIP plus `update.json` and uploads them as a GitHub Actions artifact. A normal commit does **not** create a public GitHub Release.
+
+To publish an update to users, push a tag matching the version in `pom.xml`, for example:
+
+```bash
+git tag v0.10.0
+git push origin v0.10.0
+```
+
+That tagged run creates/updates the public GitHub Release and uploads both `JavaScreenRecorder-0.10.0-win-x64.zip` and `update.json`. Installed copies use the stable `releases/latest/download/update.json` URL.
+
+Code signing remains optional. If signing secrets are absent, CI now builds an unsigned package instead of failing workflow validation.

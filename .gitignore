@@ -1,17 +1,16 @@
 target/
 .idea/
 *.iml
-/dist/
-# Downloaded FFmpeg binaries
+
+# Downloaded FFmpeg binaries are build-time dependencies, not repository files.
 src/main/resources/native/windows-x64/ffmpeg.exe
 src/main/resources/native/windows-x64/ffprobe.exe
 
-# Temporary FFmpeg downloads
-.ffmpeg-cache/
-downloads/
-
-# Build results
-target/
+# Generated application/release output.
 dist/
 dist-installer/
-release-build/
+release-out/
+
+# Local caches / temporary downloads.
+.ffmpeg-cache/
+downloads/
