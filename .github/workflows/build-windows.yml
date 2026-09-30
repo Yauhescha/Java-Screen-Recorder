@@ -32,9 +32,11 @@ jobs:
         run: |
           [xml]$pom = Get-Content .\pom.xml
           $version = [string]$pom.project.version
+
           if ([string]::IsNullOrWhiteSpace($version)) {
             throw "Could not read version from pom.xml"
           }
+
           "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           Write-Host "Version: $version"
 
@@ -44,12 +46,11 @@ jobs:
           BUILD_VERSION: ${{ steps.version.outputs.version }}
         run: |
           $path = ".\src\main\java\com\example\screenrecorder\AppVersion.java"
+
           if (-not (Test-Path $path)) {
             throw "AppVersion.java not found: $path"
           }
 
-          # Windows PowerShell 5.1 writes UTF-8 with BOM when using
-          # Set-Content -Encoding utf8. javac rejects that BOM here.
           $content = [System.IO.File]::ReadAllText($path)
           $content = $content.TrimStart([char]0xFEFF)
 
@@ -59,7 +60,7 @@ jobs:
           $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
           [System.IO.File]::WriteAllText($path, $updated, $utf8NoBom)
 
-          Write-Host "AppVersion.java synchronized to $env:BUILD_VERSION using UTF-8 without BOM."
+          Write-Host "AppVersion.java synchronized to $env:BUILD_VERSION"
 
       - name: Prepare optional signing certificate
         shell: powershell
@@ -76,7 +77,9 @@ jobs:
             $pfxPath,
             [Convert]::FromBase64String($env:JSR_SIGN_PFX_BASE64)
           )
+
           "JSR_SIGN_PFX=$pfxPath" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "Signing certificate prepared."
 
       - name: Build ZIP and update.json
         shell: powershell
@@ -84,12 +87,13 @@ jobs:
           JSR_SIGN_PFX_PASSWORD: ${{ secrets.JSR_SIGN_PFX_PASSWORD }}
         run: |
           $notes = (git log -1 --pretty=%s).Trim()
+
           .\scripts\build-release-package.ps1 `
             -Repository "${{ github.repository }}" `
             -Notes $notes
 
           if ($LASTEXITCODE -ne 0) {
-            throw "Release package build failed"
+            throw "Release package build failed."
           }
 
       - name: Verify release files
@@ -103,9 +107,13 @@ jobs:
           if (-not (Test-Path $zip)) {
             throw "ZIP not found: $zip"
           }
+
           if (-not (Test-Path $manifest)) {
             throw "update.json not found: $manifest"
           }
+
+          Write-Host "Release ZIP: $zip"
+          Write-Host "Update manifest: $manifest"
 
       - name: Upload Actions artifact
         uses: actions/upload-artifact@v5
@@ -117,12 +125,4 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Publish GitHub Release when version is new
-        id: publish
-        shell: powershell
-        env:
-          GH_TOKEN: ${{ github.token }}
-          BUILD_VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          $tag = "v$env:BUILD_VERSION"
-          $repo = "${{ github.repository }}"
+      - name: Publish GitHub Release if this version is new
