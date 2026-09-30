@@ -20,6 +20,19 @@ public record DisplayMonitor(
         return Math.max(100, Math.round(dpi * 100f / 96f));
     }
 
+
+    /** Best-effort DXGI output index used by FFmpeg ddagrab (\\.\DISPLAY1 -> 0). */
+    public int dxgiOutputIndex() {
+        String source = name == null || name.isBlank() ? id : name;
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("DISPLAY(\\d+)",
+                java.util.regex.Pattern.CASE_INSENSITIVE).matcher(source == null ? "" : source);
+        if (m.find()) {
+            try { return Math.max(0, Integer.parseInt(m.group(1)) - 1); }
+            catch (NumberFormatException ignored) { }
+        }
+        return -1;
+    }
+
     @Override public Rectangle bounds() {
         return new Rectangle(bounds);
     }

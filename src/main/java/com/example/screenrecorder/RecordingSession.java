@@ -92,6 +92,36 @@ public final class RecordingSession {
         log.accept("Recording resumed.");
     }
 
+
+    /**
+     * Moves an active REGION recording without changing the output dimensions.
+     * FFmpeg/gdigrab cannot change offset_x/offset_y in-place, so the current
+     * crash-safe MKV segment is closed and the next segment starts at the new
+     * coordinates. Finalization already concatenates these segments losslessly.
+     */
+    public synchronized void relocateRegion(CaptureRegion newRegion) throws Exception {
+        if (state == State.IDLE || baseConfig == null || baseConfig.captureMode() != CaptureMode.REGION) return;
+        CaptureRegion even = newRegion.evenSized();
+        CaptureRegion old = baseConfig.region().evenSized();
+        if (even.width() != old.width() || even.height() != old.height()) {
+            throw new IllegalArgumentException("Capture size cannot be changed during recording. Pause/stop first.");
+        }
+        if (even.x() == old.x() && even.y() == old.y()) return;
+
+        if (state == State.RECORDING) {
+            recorder.stop(log);
+            accumulateSegmentStats();
+            baseConfig = baseConfig.withRegion(even);
+            startNextSegment();
+            recoveryService.updateState(recoveryDir, baseConfig.outputFile(), "RECORDING");
+            log.accept("Capture region moved to " + even.x() + "," + even.y() +
+                    " without changing " + even.width() + "x" + even.height() + ".");
+        } else {
+            baseConfig = baseConfig.withRegion(even);
+            log.accept("Paused capture region moved to " + even.x() + "," + even.y() + ".");
+        }
+    }
+
     /** Stops the session, remuxes recoverable MKV segments into the selected output container and returns its path. */
     public synchronized Path stop() throws Exception {
         if (state == State.IDLE) return null;
@@ -134,15 +164,31 @@ public final class RecordingSession {
             recorder.setMicrophoneMuted(microphoneMuted);
             recorder.start(segmentConfig, log, audioLevels, this::onSegmentStats, healthListener);
         } catch (Exception first) {
-            if (segmentConfig.videoEncoder() == VideoEncoder.NVIDIA_NVENC) {
+            Exception last = first;
+
+            if (segmentConfig.fastGpuCapture()) {
+                log.accept("Desktop Duplication GPU capture could not start. Falling back to GDI capture automatically.");
+                baseConfig = baseConfig.withFastGpuCapture(false);
+                segmentConfig = baseConfig.withOutputFile(part);
+                try {
+                    recorder.setMicrophoneMuted(microphoneMuted);
+                    recorder.start(segmentConfig, log, audioLevels, this::onSegmentStats, healthListener);
+                    last = null;
+                } catch (Exception gdiFailure) {
+                    last = gdiFailure;
+                }
+            }
+
+            if (last != null && segmentConfig.videoEncoder() == VideoEncoder.NVIDIA_NVENC) {
                 log.accept("NVENC could not start this recording. Falling back to CPU H.264 automatically.");
-                baseConfig = baseConfig.withVideoEncoder(VideoEncoder.CPU_X264);
+                baseConfig = baseConfig.withVideoEncoder(VideoEncoder.CPU_X264).withFastGpuCapture(false);
                 segmentConfig = baseConfig.withOutputFile(part);
                 recorder.setMicrophoneMuted(microphoneMuted);
                 recorder.start(segmentConfig, log, audioLevels, this::onSegmentStats, healthListener);
-            } else {
-                throw first;
+                last = null;
             }
+
+            if (last != null) throw last;
         }
 
         segments.add(part);

@@ -74,7 +74,9 @@ try {
         --main-jar $JarName `
         --main-class "com.example.screenrecorder.ScreenRecorderApp" `
         --java-options "-Dfile.encoding=UTF-8" `
-        --java-options "--enable-native-access=ALL-UNNAMED"
+        --java-options "--enable-native-access=ALL-UNNAMED" `
+        --java-options "-Xms64m" `
+        --java-options "-Xmx512m"
     if ($LASTEXITCODE -ne 0) { throw "jpackage app-image build failed." }
 
     $PortableExe = Join-Path $DistDir "JavaScreenRecorder\JavaScreenRecorder.exe"

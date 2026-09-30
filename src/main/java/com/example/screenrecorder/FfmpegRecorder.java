@@ -171,36 +171,70 @@ public final class FfmpegRecorder {
         cmd.add("-y");
         cmd.add("-hide_banner");
         cmd.add("-stats_period"); cmd.add("0.5");
+        cmd.add("-fflags"); cmd.add("+genpts");
 
-        // Screen inputs always come first. For selected/all-monitor capture each physical
-        // Win32 monitor is grabbed independently and xstack reconstructs the real layout.
-        // This avoids Java logical-coordinate/DPI scaling leaking into FFmpeg offsets.
+        // Screen inputs always come first. For a single monitor or a region fully
+        // contained on one monitor, NVENC can use FFmpeg's Desktop Duplication API
+        // (ddagrab) and keep frames on the GPU. This is far lighter than GDI capture.
+        // Unsupported systems fall back to gdigrab in RecordingSession automatically.
         List<java.awt.Rectangle> screenRects = new ArrayList<>();
         int screenInputCount;
+        boolean hardwareScreenInput = false;
 
         if (c.captureMode() == CaptureMode.WINDOW) {
             if (c.windowTarget() == null) throw new IllegalArgumentException("Select a window to record");
             java.awt.Rectangle windowBounds = c.windowTarget().bounds();
-            // Window mode must stay attached to the HWND. Capturing a desktop rectangle would freeze
-            // the capture coordinates and record the old screen location after the user moves the window.
-            // Mouse halo/click overlays are therefore intentionally disabled for WINDOW mode.
             addWindowInput(cmd, c.windowTarget(), c.fps(), c.showCursor());
             screenRects.add(windowBounds);
             screenInputCount = 1;
         } else if (c.captureMode() == CaptureMode.REGION) {
             CaptureRegion r = c.region().evenSized();
-            addDesktopInput(cmd, new java.awt.Rectangle(r.x(), r.y(), r.width(), r.height()), c.fps(), c.showCursor());
-            screenRects.add(new java.awt.Rectangle(r.x(), r.y(), r.width(), r.height()));
+            java.awt.Rectangle regionRect = new java.awt.Rectangle(r.x(), r.y(), r.width(), r.height());
+            DisplayMonitor owner = null;
+            if (c.fastGpuCapture()) {
+                for (DisplayMonitor monitor : c.captureMonitors()) {
+                    if (monitor.dxgiOutputIndex() >= 0 && monitor.bounds().contains(regionRect)) {
+                        owner = monitor;
+                        break;
+                    }
+                }
+            }
+            if (owner != null) {
+                java.awt.Rectangle mb = owner.bounds();
+                addDdaInput(cmd, owner.dxgiOutputIndex(),
+                        regionRect.x - mb.x, regionRect.y - mb.y,
+                        regionRect.width, regionRect.height, c.fps(), c.showCursor());
+                hardwareScreenInput = true;
+            } else {
+                addDesktopInput(cmd, regionRect, c.fps(), c.showCursor());
+            }
+            screenRects.add(regionRect);
             screenInputCount = 1;
         } else {
             List<DisplayMonitor> monitors = c.captureMonitors();
             if (monitors == null || monitors.isEmpty()) {
                 throw new IllegalArgumentException("No monitor is selected for capture");
             }
-            for (DisplayMonitor monitor : monitors) {
-                java.awt.Rectangle b = monitor.bounds();
-                addDesktopInput(cmd, b, c.fps(), c.showCursor());
-                screenRects.add(b);
+
+            // Desktop Duplication can capture more than one DXGI output as separate
+            // hardware inputs. Multi-monitor composition still needs a download for
+            // xstack, but capture itself no longer relies on the much heavier GDI path.
+            boolean canUseDdaForAll = c.fastGpuCapture() &&
+                    monitors.stream().allMatch(m -> m.dxgiOutputIndex() >= 0);
+            if (canUseDdaForAll) {
+                for (DisplayMonitor monitor : monitors) {
+                    java.awt.Rectangle b = monitor.bounds();
+                    addDdaInput(cmd, monitor.dxgiOutputIndex(), 0, 0,
+                            b.width, b.height, c.fps(), c.showCursor());
+                    screenRects.add(b);
+                }
+                hardwareScreenInput = true;
+            } else {
+                for (DisplayMonitor monitor : monitors) {
+                    java.awt.Rectangle b = monitor.bounds();
+                    addDesktopInput(cmd, b, c.fps(), c.showCursor());
+                    screenRects.add(b);
+                }
             }
             screenInputCount = monitors.size();
         }
@@ -210,7 +244,7 @@ public final class FfmpegRecorder {
         if (c.recordWebcam()) {
             if (c.webcamDevice() == null) throw new IllegalArgumentException("Select a webcam");
             webcamInputIndex = nextInputIndex++;
-            cmd.add("-thread_queue_size"); cmd.add("512");
+            cmd.add("-thread_queue_size"); cmd.add("8");
             if (c.webcamInputUrl() != null && !c.webcamInputUrl().isBlank()) {
                 cmd.add("-f"); cmd.add("rawvideo");
                 cmd.add("-pixel_format"); cmd.add("bgr24");
@@ -219,7 +253,7 @@ public final class FfmpegRecorder {
                 cmd.add("-i"); cmd.add(c.webcamInputUrl());
             } else {
                 // Fallback kept for compatibility if a bridge could not be prepared.
-                cmd.add("-rtbufsize"); cmd.add("256M");
+                cmd.add("-rtbufsize"); cmd.add("64M");
                 cmd.add("-f"); cmd.add("dshow");
                 cmd.add("-i"); cmd.add("video=" + c.webcamDevice().name());
             }
@@ -228,7 +262,7 @@ public final class FfmpegRecorder {
         List<Integer> audioInputIndexes = new ArrayList<>();
         for (AudioPcmSource source : sources) {
             audioInputIndexes.add(nextInputIndex++);
-            cmd.add("-thread_queue_size"); cmd.add("1024");
+            cmd.add("-thread_queue_size"); cmd.add("64");
             cmd.add("-f"); cmd.add("s16le");
             cmd.add("-ar"); cmd.add(String.valueOf(source.sampleRate()));
             cmd.add("-ac"); cmd.add(String.valueOf(source.channels()));
@@ -236,11 +270,22 @@ public final class FfmpegRecorder {
         }
 
         List<String> filters = new ArrayList<>();
-        String screenBase;
+        String screenBase = null;
+        String videoMap;
+        boolean directHardwareVideo = hardwareScreenInput && screenInputCount == 1 && webcamInputIndex == null;
+
         if (screenInputCount == 1) {
-            screenBase = "screenBase";
-            // Window dimensions can be odd; yuv420p/NVENC require even dimensions.
-            filters.add("[0:v]setpts=PTS-STARTPTS,pad=ceil(iw/2)*2:ceil(ih/2)*2[" + screenBase + "]");
+            if (directHardwareVideo) {
+                // Official FFmpeg ddagrab -> h264_nvenc path: keep D3D11 frames on GPU.
+                videoMap = "0:v:0";
+            } else {
+                screenBase = "screenBase";
+                String prefix = hardwareScreenInput
+                        ? "[0:v]hwdownload,format=bgra,setpts=PTS-STARTPTS,"
+                        : "[0:v]setpts=PTS-STARTPTS,";
+                filters.add(prefix + "pad=ceil(iw/2)*2:ceil(ih/2)*2[" + screenBase + "]");
+                videoMap = "[" + screenBase + "]";
+            }
         } else {
             java.awt.Rectangle union = null;
             StringBuilder inputs = new StringBuilder();
@@ -252,7 +297,10 @@ public final class FfmpegRecorder {
             for (int i = 0; i < screenInputCount; i++) {
                 java.awt.Rectangle b = screenRects.get(i);
                 String label = "screen" + i;
-                filters.add("[" + i + ":v]setpts=PTS-STARTPTS[" + label + "]");
+                String chain = hardwareScreenInput
+                        ? "[" + i + ":v]hwdownload,format=bgra,setpts=PTS-STARTPTS[" + label + "]"
+                        : "[" + i + ":v]setpts=PTS-STARTPTS[" + label + "]";
+                filters.add(chain);
                 inputs.append("[").append(label).append("]");
                 if (i > 0) layout.append("|");
                 layout.append(b.x - union.x).append("_").append(b.y - union.y);
@@ -261,9 +309,9 @@ public final class FfmpegRecorder {
                     ":fill=black[screenStack]");
             filters.add("[screenStack]pad=ceil(iw/2)*2:ceil(ih/2)*2[screenBase]");
             screenBase = "screenBase";
+            videoMap = "[screenBase]";
         }
 
-        String videoMap = "[" + screenBase + "]";
         if (webcamInputIndex != null) {
             WebcamPlacement p = c.webcamPlacement();
             if (p == null) throw new IllegalArgumentException("Webcam overlay placement is missing");
@@ -280,12 +328,12 @@ public final class FfmpegRecorder {
             if (border > 0) {
                 String borderBase = "wborderbase";
                 filters.add("color=c=" + ffmpegColor(c.webcamBorderRgb(), 1.0) +
-                        ":s=" + p.width() + "x" + p.height() + ":r=" + c.fps() +
+                        ":s=" + p.width() + "x" + p.height() + ":r=" + c.webcamInputFps() +
                         ",format=rgba[" + borderBase + "]");
                 String borderLayer = borderBase;
                 if (shape != WebcamShape.RECTANGLE) {
                     String mask = "wborderMask";
-                    filters.add(shapeMaskFilter(mask, p.width(), p.height(), c.fps(), shape));
+                    filters.add(shapeMaskFilter(mask, p.width(), p.height(), c.webcamInputFps(), shape));
                     borderLayer = "wborderShape";
                     filters.add("[" + borderBase + "][" + mask + "]alphamerge[" + borderLayer + "]");
                 }
@@ -296,7 +344,7 @@ public final class FfmpegRecorder {
                 String camInner = "wcamInnerBase";
                 if (shape != WebcamShape.RECTANGLE) {
                     String mask = "wcamInnerMask";
-                    filters.add(shapeMaskFilter(mask, innerW, innerH, c.fps(), shape));
+                    filters.add(shapeMaskFilter(mask, innerW, innerH, c.webcamInputFps(), shape));
                     camInner = "wcamInnerShape";
                     filters.add("[wcamInnerBase][" + mask + "]alphamerge[" + camInner + "]");
                 }
@@ -310,7 +358,7 @@ public final class FfmpegRecorder {
                 camFinal = "wcamBase";
                 if (shape != WebcamShape.RECTANGLE) {
                     String mask = "wcamMask";
-                    filters.add(shapeMaskFilter(mask, p.width(), p.height(), c.fps(), shape));
+                    filters.add(shapeMaskFilter(mask, p.width(), p.height(), c.webcamInputFps(), shape));
                     camFinal = "wcamShape";
                     filters.add("[wcamBase][" + mask + "]alphamerge[" + camFinal + "]");
                 }
@@ -319,11 +367,11 @@ public final class FfmpegRecorder {
             String screenLayer = screenBase;
             if (c.webcamShadow()) {
                 filters.add("color=c=black@0.38:s=" + p.width() + "x" + p.height() +
-                        ":r=" + c.fps() + ",format=rgba[wshadowBase]");
+                        ":r=" + c.webcamInputFps() + ",format=rgba[wshadowBase]");
                 String shadowLayer = "wshadowBase";
                 if (shape != WebcamShape.RECTANGLE) {
                     String mask = "wshadowMask";
-                    filters.add(shapeMaskFilter(mask, p.width(), p.height(), c.fps(), shape));
+                    filters.add(shapeMaskFilter(mask, p.width(), p.height(), c.webcamInputFps(), shape));
                     shadowLayer = "wshadowShape";
                     filters.add("[wshadowBase][" + mask + "]alphamerge[" + shadowLayer + "]");
                 }
@@ -373,8 +421,10 @@ public final class FfmpegRecorder {
             audioMaps.add("[" + micLabel + "]");
         }
 
-        cmd.add("-filter_complex");
-        cmd.add(String.join(";", filters));
+        if (!filters.isEmpty()) {
+            cmd.add("-filter_complex");
+            cmd.add(String.join(";", filters));
+        }
         cmd.add("-map"); cmd.add(videoMap);
         for (String audioMap : audioMaps) {
             cmd.add("-map"); cmd.add(audioMap);
@@ -390,7 +440,7 @@ public final class FfmpegRecorder {
             cmd.add("-metadata:s:a:0"); cmd.add("title=Mixed audio");
         }
 
-        if (c.videoEncoder() == VideoEncoder.NVIDIA_NVENC) addNvencSettings(cmd, c.qualityPercent());
+        if (c.videoEncoder() == VideoEncoder.NVIDIA_NVENC) addNvencSettings(cmd, c.qualityPercent(), directHardwareVideo);
         else addCpuSettings(cmd, c.qualityPercent());
 
         if (!sources.isEmpty()) {
@@ -399,16 +449,38 @@ public final class FfmpegRecorder {
             cmd.add("-ar"); cmd.add("48000");
         }
 
+        // Force constant frame pacing in the saved stream. gdigrab timestamps can be
+        // slightly irregular under desktop load; CFR duplicates/drops only when needed
+        // instead of producing visibly jerky playback timing.
+        cmd.add("-fps_mode"); cmd.add("cfr");
+        cmd.add("-r"); cmd.add(String.valueOf(c.fps()));
         cmd.add("-flush_packets"); cmd.add("1");
         cmd.add("-f"); cmd.add("matroska");
         cmd.add(c.outputFile().toAbsolutePath().toString());
         return cmd;
     }
 
+    private static void addDdaInput(List<String> cmd, int outputIndex, int offsetX, int offsetY,
+                                    int width, int height, int fps, boolean showCursor) {
+        String source = "ddagrab=output_idx=" + outputIndex +
+                ":framerate=" + fps +
+                ":draw_mouse=" + (showCursor ? 1 : 0) +
+                ":video_size=" + width + "x" + height +
+                ":offset_x=" + Math.max(0, offsetX) +
+                ":offset_y=" + Math.max(0, offsetY) +
+                ":dup_frames=1";
+        cmd.add("-f"); cmd.add("lavfi");
+        cmd.add("-i"); cmd.add(source);
+    }
+
     private static void addDesktopInput(List<String> cmd, java.awt.Rectangle area, int fps, boolean showCursor) {
-        cmd.add("-thread_queue_size"); cmd.add("1024");
+        // A raw 2560x1600 BGRA frame is ~16 MiB. A queue of 1024 frames could let
+        // FFmpeg reserve/retain enormous amounts of memory. Keep only a handful of
+        // fresh frames: a screen recorder should drop stale frames, never buffer seconds.
+        cmd.add("-thread_queue_size"); cmd.add("8");
         cmd.add("-f"); cmd.add("gdigrab");
         cmd.add("-framerate"); cmd.add(String.valueOf(fps));
+        cmd.add("-use_wallclock_as_timestamps"); cmd.add("1");
         cmd.add("-draw_mouse"); cmd.add(showCursor ? "1" : "0");
         cmd.add("-offset_x"); cmd.add(String.valueOf(area.x));
         cmd.add("-offset_y"); cmd.add(String.valueOf(area.y));
@@ -417,9 +489,10 @@ public final class FfmpegRecorder {
     }
 
     private static void addWindowInput(List<String> cmd, WindowTarget target, int fps, boolean showCursor) {
-        cmd.add("-thread_queue_size"); cmd.add("1024");
+        cmd.add("-thread_queue_size"); cmd.add("8");
         cmd.add("-f"); cmd.add("gdigrab");
         cmd.add("-framerate"); cmd.add(String.valueOf(fps));
+        cmd.add("-use_wallclock_as_timestamps"); cmd.add("1");
         cmd.add("-draw_mouse"); cmd.add(showCursor ? "1" : "0");
         cmd.add("-i"); cmd.add("hwnd=" + target.ffmpegHandle());
     }
@@ -468,20 +541,26 @@ public final class FfmpegRecorder {
         cmd.add("-pix_fmt"); cmd.add("yuv420p");
     }
 
-    private void addNvencSettings(List<String> cmd, int qualityPercent) {
+    private void addNvencSettings(List<String> cmd, int qualityPercent, boolean hardwareFrames) {
         cmd.add("-c:v"); cmd.add("h264_nvenc");
         cmd.add("-gpu"); cmd.add("any");
-        cmd.add("-pix_fmt"); cmd.add("yuv420p");
+        if (!hardwareFrames) {
+            cmd.add("-pix_fmt"); cmd.add("yuv420p");
+        }
 
         if (qualityPercent >= 100) {
-            cmd.add("-preset"); cmd.add("p7");
+            cmd.add("-preset"); cmd.add("p6");
             cmd.add("-tune"); cmd.add("lossless");
             cmd.add("-rc"); cmd.add("constqp");
             cmd.add("-qp"); cmd.add("0");
         } else {
-            cmd.add("-preset"); cmd.add(qualityPercent >= 85 ? "p6" : "p5");
+            // p4/p5 is substantially lighter than p6/p7 and is a better default
+            // for real-time desktop capture. CQ still controls visual quality.
+            cmd.add("-preset"); cmd.add(qualityPercent >= 90 ? "p5" : "p4");
             cmd.add("-tune"); cmd.add("hq");
             cmd.add("-rc"); cmd.add("vbr");
+            cmd.add("-multipass"); cmd.add("disabled");
+            cmd.add("-rc-lookahead"); cmd.add("0");
             cmd.add("-cq"); cmd.add(String.valueOf(qualityToNvencCq(qualityPercent)));
             cmd.add("-b:v"); cmd.add("0");
         }

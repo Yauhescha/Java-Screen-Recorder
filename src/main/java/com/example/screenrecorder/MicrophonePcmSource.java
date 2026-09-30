@@ -67,8 +67,11 @@ final class MicrophonePcmSource extends TcpPcmSource {
                 last = e;
             }
         }
-        throw new LineUnavailableException("Cannot open microphone" +
-                (last == null ? "" : ": " + last.getMessage()));
+        LineUnavailableException friendly = new LineUnavailableException(
+                "The selected microphone could not be opened. Close apps that may be using it exclusively, " +
+                "click Refresh, and try the microphone again or choose another device.");
+        if (last != null) friendly.initCause(last);
+        throw friendly;
     }
 
     @Override public int sampleRate() {

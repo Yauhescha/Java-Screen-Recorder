@@ -48,6 +48,12 @@ final class WebcamPreviewService implements AutoCloseable {
     private volatile Consumer<String> failureConsumer;
     private volatile CountDownLatch firstFrameLatch = new CountDownLatch(1);
     private final ArrayBlockingQueue<byte[]> bridgeFrames = new ArrayBlockingQueue<>(3);
+    // Reuse two preview images instead of allocating ~700 KiB 15 times per second.
+    private final BufferedImage[] previewBuffers = {
+            new BufferedImage(WIDTH, HEIGHT, BufferedImage.TYPE_3BYTE_BGR),
+            new BufferedImage(WIDTH, HEIGHT, BufferedImage.TYPE_3BYTE_BGR)
+    };
+    private int previewBufferIndex;
 
     synchronized void start(String ffmpegPath, WebcamDevice device,
                             Consumer<BufferedImage> onFrame, Consumer<String> log,
@@ -76,7 +82,7 @@ final class WebcamPreviewService implements AutoCloseable {
             Process p = new ProcessBuilder(
                     ffmpegPath,
                     "-hide_banner", "-loglevel", "warning",
-                    "-thread_queue_size", "128",
+                    "-thread_queue_size", "8",
                     "-f", "dshow",
                     "-i", "video=" + device.name(),
                     "-vf", "scale=" + WIDTH + ":" + HEIGHT + ":force_original_aspect_ratio=increase," +
@@ -197,7 +203,6 @@ final class WebcamPreviewService implements AutoCloseable {
                     while (!client.isClosed() && !server.isClosed()) {
                         byte[] frame = bridgeFrames.take();
                         out.write(frame);
-                        out.flush();
                     }
                 } finally {
                     if (bridgeClient == client) bridgeClient = null;
@@ -242,7 +247,7 @@ final class WebcamPreviewService implements AutoCloseable {
 
                 Consumer<BufferedImage> consumer = frameConsumer;
                 if (consumer != null) {
-                    BufferedImage image = new BufferedImage(WIDTH, HEIGHT, BufferedImage.TYPE_3BYTE_BGR);
+                    BufferedImage image = previewBuffers[previewBufferIndex++ & 1];
                     byte[] dst = ((DataBufferByte) image.getRaster().getDataBuffer()).getData();
                     System.arraycopy(frame, 0, dst, 0, frame.length);
                     consumer.accept(image);

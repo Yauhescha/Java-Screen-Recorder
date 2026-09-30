@@ -1,4 +1,4 @@
-# Java Screen Recorder 0.10.0
+# Java Screen Recorder 0.11.0
 
 Windows screen recorder written in Java 17/Swing with FFmpeg, WASAPI and Windows-native capture helpers.
 
@@ -92,16 +92,7 @@ Every commit:
 5. generates the matching `update.json`;
 6. uploads ZIP + JSON as a GitHub Actions artifact.
 
-This intentionally does **not** publish an update to users on every commit.
-
-To release a version, make sure `pom.xml` and `AppVersion.VERSION` contain the same version, then push a matching tag:
-
-```bash
-git tag v0.10.0
-git push origin v0.10.0
-```
-
-The tag workflow automatically creates the GitHub Release, uploads the ZIP and `update.json`, and marks it latest. Installed copies then discover that manifest through the stable `releases/latest/download/update.json` URL.
+Every push to `main` also creates or updates GitHub Release `v<version from pom.xml>` and uploads the ZIP plus `update.json`. The workflow synchronizes `AppVersion.java` from `pom.xml`, so `pom.xml` is the release version source of truth. To publish a new user-visible update, bump `<version>` in `pom.xml` and push to `main`. Installed copies discover the latest manifest through the stable `releases/latest/download/update.json` URL.
 
 ## Code signing
 
@@ -134,17 +125,10 @@ The older `jpackage + WiX` installer pipeline is still available through `build-
 
 Review `THIRD_PARTY_NOTICES.txt` and the license of the exact FFmpeg build before public or commercial redistribution.
 
-## GitHub Actions publication behavior
+## 0.11.0 performance and capture changes
 
-Every push to `main` builds a Windows ZIP plus `update.json` and uploads them as a GitHub Actions artifact. A normal commit does **not** create a public GitHub Release.
+When NVIDIA NVENC is selected, monitor capture and regions fully contained on a monitor now prefer FFmpeg Desktop Duplication (`ddagrab`). A single-monitor/region path can keep frames on the GPU through NVENC. Multiple monitors use one Desktop Duplication input per output and then compose them; if Desktop Duplication cannot start on a particular PC/session, the recorder automatically retries with the compatible GDI capture backend.
 
-To publish an update to users, push a tag matching the version in `pom.xml`, for example:
+The screen input queue is intentionally kept very small. A raw 2560x1600 BGRA frame is roughly 16 MiB, so large FFmpeg packet queues are inappropriate for real-time screen recording and can cause very high RAM use and delayed/stale frames.
 
-```bash
-git tag v0.10.0
-git push origin v0.10.0
-```
-
-That tagged run creates/updates the public GitHub Release and uploads both `JavaScreenRecorder-0.10.0-win-x64.zip` and `update.json`. Installed copies use the stable `releases/latest/download/update.json` URL.
-
-Code signing remains optional. If signing secrets are absent, CI now builds an unsigned package instead of failing workflow validation.
+For a resizable region, the capture frame can be moved during recording. The recorder closes the current recoverable MKV segment and starts another at the new coordinates, then losslessly finalizes the segments together on Stop.

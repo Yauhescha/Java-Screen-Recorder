@@ -1,7 +1,9 @@
 # Roadmap
 
-Current version: **0.10.0**.
-
-Before 1.0.0: focus on real-world bug fixing, update rollback tests, long recordings, device hot-plug, multi-monitor edge cases and public-release feedback.
-
-Use patch releases for fixes (`0.10.1`, `0.10.2`) and minor releases for additional features (`0.11.0`, ...). Move to `1.0.0` only after explicitly deciding the product is ready for its first stable release.
+## Before 1.0
+- Long-duration stress tests (1h / 4h / 8h recordings).
+- Validate Desktop Duplication + NVENC on NVIDIA, Intel-only and AMD systems.
+- Benchmark CPU/GPU/RAM against Bandicam/OBS for 1080p60 and dual-monitor capture.
+- Further optimize multi-monitor composition so downloaded DXGI frames can be composed with less CPU overhead.
+- Add automated integration tests for recovery, pause/resume and in-recording region relocation.
+- Final installer/signing/SmartScreen testing.

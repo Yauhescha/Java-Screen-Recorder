@@ -123,7 +123,9 @@ public final class RecorderFrame extends JFrame {
     private Color webcamBorderColor;
     private boolean updatingRegionControls;
     private boolean recorderWindowExcluded;
+    private boolean regionOverlayExcluded;
     private boolean webcamPreviewExcluded;
+    private boolean regionRelocationBusy;
     private boolean webcamOverlayVisibleBeforeRecording;
 
     private final Timer elapsedTimer;
@@ -267,7 +269,7 @@ public final class RecorderFrame extends JFrame {
         microphoneNoiseSuppression.setToolTipText("FFmpeg FFT denoiser (afftdn) applied to the microphone track.");
         microphoneNoiseGate.setToolTipText("Closes the microphone below the selected threshold to reduce room/background noise.");
         microphoneNoiseGateDb.setToolTipText("Noise-gate threshold in dB. More negative = more sensitive.");
-        muteMicrophoneButton.setFocusPainted(false);
+        AppTheme.styleToggleButton(muteMicrophoneButton);
         muteMicrophoneButton.setToolTipText("Instantly mute/unmute microphone PCM while recording. The default global hotkey is F10.");
 
         startStopHotkeyField = new HotkeyCaptureField(
@@ -896,11 +898,67 @@ public final class RecorderFrame extends JFrame {
                     syncWebcamOverlayToCapture();
                 });
             });
+            overlay.setRecordingControls(
+                    this::pauseResumeRecording,
+                    this::stopRecording,
+                    () -> overlay.setVisible(false),
+                    this::relocateActiveRegion);
         }
         overlay.setCaptureState(RegionOverlay.CaptureState.READY);
         overlay.setRegion(region);
         overlay.setVisible(true);
         overlay.toFront();
+    }
+
+    private void relocateActiveRegion(CaptureRegion requested) {
+        CaptureMode mode = activeConfig != null ? activeConfig.captureMode() : (CaptureMode) modeBox.getSelectedItem();
+        if (mode != CaptureMode.REGION) return;
+
+        CaptureRegion previous = region.evenSized();
+        CaptureRegion next = new CaptureRegion(
+                requested.x(), requested.y(), previous.width(), previous.height()).evenSized();
+
+        region = next;
+        UserPreferences.region(next);
+        updateRegionText();
+        if (webcamOverlay != null && webcamOverlay.isDisplayable()) {
+            webcamOverlay.setCaptureBoundsKeepingPlacement(
+                    new Rectangle(next.x(), next.y(), next.width(), next.height()));
+            webcamPlacement = webcamOverlay.placement();
+            UserPreferences.webcamPlacement(webcamPlacement);
+            updateWebcamPlacementLabel();
+        }
+
+        if (!session.isActive()) return;
+        if (regionRelocationBusy) {
+            append("Capture-region move ignored because the previous move is still being applied.");
+            return;
+        }
+
+        regionRelocationBusy = true;
+        append("Moving active capture region to " + next.x() + "," + next.y() + "...");
+        runTask(
+                () -> {
+                    session.relocateRegion(next);
+                    return next;
+                },
+                moved -> {
+                    if (activeConfig != null) activeConfig = activeConfig.withRegion(moved);
+                    regionRelocationBusy = false;
+                    append("Active capture region moved to " + moved.x() + "," + moved.y() + ".");
+                },
+                ex -> {
+                    regionRelocationBusy = false;
+                    region = previous;
+                    UserPreferences.region(previous);
+                    updateRegionText();
+                    if (overlay != null) overlay.setRegion(previous);
+                    if (webcamOverlay != null && webcamOverlay.isDisplayable()) {
+                        webcamOverlay.setCaptureBoundsKeepingPlacement(
+                                new Rectangle(previous.x(), previous.y(), previous.width(), previous.height()));
+                    }
+                    error(new IllegalStateException("Could not move the active recording region. The previous position was restored.", ex));
+                });
     }
 
     private void startRecording() {
@@ -953,8 +1011,12 @@ public final class RecorderFrame extends JFrame {
             if (recordWebcam.isSelected() && selectedWebcam == null) {
                 throw new IllegalArgumentException("Select a webcam");
             }
-            if (webcamOverlay != null && webcamOverlay.isDisplayable() && webcamOverlay.isVisible()) {
-                webcamPlacement = webcamOverlay.placement();
+            if (webcamOverlay != null && webcamOverlay.isDisplayable()) {
+                // Monitor refresh can change the virtual desktop origin (for example when
+                // a second display sits to the left). Preserve the physical preview position
+                // instead of reusing an old relative X/Y that makes the camera jump.
+                webcamOverlay.setCaptureBounds(captureBounds);
+                if (webcamOverlay.isVisible()) webcamPlacement = webcamOverlay.placement();
             }
             if (webcamPlacement == null) {
                 webcamPlacement = UserPreferences.webcamPlacement(captureBounds.width, captureBounds.height);
@@ -979,6 +1041,11 @@ public final class RecorderFrame extends JFrame {
                 append("Window capture: mouse highlight/click effects are disabled so capture follows the selected window when it moves.");
             }
 
+            boolean fastGpuCapture = resolvedEncoder == VideoEncoder.NVIDIA_NVENC &&
+                    mode != CaptureMode.WINDOW &&
+                    (mode == CaptureMode.REGION || (!captureMonitors.isEmpty() &&
+                            captureMonitors.stream().allMatch(m -> m.dxgiOutputIndex() >= 0)));
+
             RecorderConfig config = new RecorderConfig(
                     ffmpegPath,
                     mode,
@@ -997,6 +1064,7 @@ public final class RecorderFrame extends JFrame {
                     (Integer) microphoneNoiseGateDb.getValue(),
                     separateAudioTracks.isSelected(),
                     resolvedEncoder,
+                    fastGpuCapture,
                     showCursor.isSelected(),
                     windowCaptureNeedsDesktopEffects,
                     recordWebcam.isSelected(),
@@ -1051,6 +1119,9 @@ public final class RecorderFrame extends JFrame {
                         elapsedTimer.start();
                         append("Recording started: " + cfg.outputFile());
                         append("Encoder: " + cfg.videoEncoder());
+                        append("Capture backend: " + (cfg.fastGpuCapture()
+                                ? "Desktop Duplication (GPU, automatic GDI fallback)"
+                                : "GDI/Window capture"));
                         if (cfg.recordMicrophone()) {
                             microphoneStatusLabel.setText("Recording");
                             microphoneStatusLabel.setForeground(AppTheme.GOOD);
@@ -1310,14 +1381,27 @@ public final class RecorderFrame extends JFrame {
 
     private void applyRecorderWindowExclusionIfNeeded() {
         recorderWindowExcluded = false;
-        if (!excludeRecorderWindow.isSelected()) return;
-        recorderWindowExcluded = WindowCaptureExclusion.setExcluded(this, true, this::append);
+        regionOverlayExcluded = false;
+        if (excludeRecorderWindow.isSelected()) {
+            recorderWindowExcluded = WindowCaptureExclusion.setExcluded(this, true, this::append);
+        }
+        // The selection border is a helper UI and must never leak into a REGION recording,
+        // especially on 125/150% DPI where logical and physical border pixels differ.
+        if ((CaptureMode) modeBox.getSelectedItem() == CaptureMode.REGION && overlay != null && overlay.isVisible()) {
+            regionOverlayExcluded = WindowCaptureExclusion.setExcluded(
+                    overlay, true, "Capture frame", this::append);
+        }
     }
 
     private void restoreRecorderWindowCapture() {
-        if (!recorderWindowExcluded) return;
-        WindowCaptureExclusion.setExcluded(this, false, this::append);
-        recorderWindowExcluded = false;
+        if (recorderWindowExcluded) {
+            WindowCaptureExclusion.setExcluded(this, false, this::append);
+            recorderWindowExcluded = false;
+        }
+        if (regionOverlayExcluded && overlay != null) {
+            WindowCaptureExclusion.setExcluded(overlay, false, "Capture frame", this::append);
+            regionOverlayExcluded = false;
+        }
     }
 
     private CaptureRegion currentRegion() {
@@ -1560,6 +1644,9 @@ public final class RecorderFrame extends JFrame {
     private List<DisplayMonitor> captureMonitorsForMode(CaptureMode mode) {
         if (mode == CaptureMode.FULL_SCREEN) return availableMonitors;
         if (mode == CaptureMode.MONITORS) return selectedMonitors;
+        // REGION itself ignores this list for geometry, but FFmpeg can use it to
+        // identify the owning DXGI output for Desktop Duplication GPU capture.
+        if (mode == CaptureMode.REGION) return availableMonitors;
         return List.of();
     }
 
@@ -2257,12 +2344,70 @@ public final class RecorderFrame extends JFrame {
     }
 
     private void warning(String message) {
-        JOptionPane.showMessageDialog(this, message, "Warning", JOptionPane.WARNING_MESSAGE);
+        showDarkMessage("Warning", message, new Color(255, 183, 77));
     }
 
     private void error(Throwable e) {
-        String message = e.getMessage() == null ? e.toString() : e.getMessage();
+        String message = friendlyErrorMessage(e);
         append("ERROR: " + message);
-        JOptionPane.showMessageDialog(this, message, "Error", JOptionPane.ERROR_MESSAGE);
+        Throwable cause = e.getCause();
+        if (cause != null && cause.getMessage() != null && !cause.getMessage().equals(message)) {
+            append("Cause: " + cause.getMessage());
+        }
+        showDarkMessage("Error", message, AppTheme.RECORD);
+    }
+
+    private String friendlyErrorMessage(Throwable e) {
+        String raw = e == null ? "Unknown error" : (e.getMessage() == null ? e.toString() : e.getMessage());
+        String lower = raw.toLowerCase(java.util.Locale.ROOT);
+        if (lower.contains("microphone") && (lower.contains("cannot open") || lower.contains("could not be opened") || lower.contains("line with format"))) {
+            return "The selected microphone is unavailable. Close apps that may use it exclusively, click Refresh, " +
+                    "then try again or choose another microphone.";
+        }
+        if (lower.contains("webcam") || lower.contains("camera")) {
+            if (lower.contains("could not") || lower.contains("no webcam frame") || lower.contains("unavailable")) {
+                return "The webcam could not be opened. Close Windows Camera/Teams/Discord or other apps using it, " +
+                        "click Refresh, and try again.";
+            }
+        }
+        return raw;
+    }
+
+    private void showDarkMessage(String title, String message, Color accent) {
+        JDialog dialog = new JDialog(this, title, true);
+        JPanel root = new JPanel(new BorderLayout(12, 14));
+        root.setBackground(AppTheme.BG);
+        root.setBorder(new EmptyBorder(18, 20, 16, 20));
+
+        JLabel badge = new JLabel(title.toUpperCase(java.util.Locale.ROOT));
+        badge.setForeground(accent);
+        badge.setFont(new Font("Segoe UI", Font.BOLD, 13));
+
+        JTextArea text = new JTextArea(message == null ? "" : message);
+        text.setEditable(false);
+        text.setLineWrap(true);
+        text.setWrapStyleWord(true);
+        text.setOpaque(true);
+        text.setBackground(AppTheme.PANEL_ALT);
+        text.setForeground(AppTheme.TEXT);
+        text.setFont(new Font("Segoe UI", Font.PLAIN, 13));
+        text.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(AppTheme.BORDER),
+                new EmptyBorder(10, 12, 10, 12)));
+
+        JButton ok = AppTheme.primaryButton("OK");
+        ok.addActionListener(ev -> dialog.dispose());
+        JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 0, 0));
+        buttons.setOpaque(false);
+        buttons.add(ok);
+
+        root.add(badge, BorderLayout.NORTH);
+        root.add(text, BorderLayout.CENTER);
+        root.add(buttons, BorderLayout.SOUTH);
+        dialog.setContentPane(root);
+        dialog.setSize(560, 210);
+        dialog.setLocationRelativeTo(this);
+        WindowsWindowStyler.apply(dialog);
+        dialog.setVisible(true);
     }
 }

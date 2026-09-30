@@ -21,6 +21,7 @@ public record RecorderConfig(
         int microphoneNoiseGateDb,
         boolean separateAudioTracks,
         VideoEncoder videoEncoder,
+        boolean fastGpuCapture,
         boolean showCursor,
         boolean windowCaptureNeedsDesktopEffects,
         boolean recordWebcam,
@@ -46,7 +47,7 @@ public record RecorderConfig(
                 ffmpegPath, captureMode, region, captureMonitors, windowTarget, qualityPercent, fps,
                 recordSystemAudio, systemVolumePercent, recordMicrophone, microphoneDevice,
                 microphoneVolumePercent, microphoneNoiseSuppression, microphoneNoiseGate, microphoneNoiseGateDb,
-                separateAudioTracks, encoder, showCursor, windowCaptureNeedsDesktopEffects,
+                separateAudioTracks, encoder, fastGpuCapture, showCursor, windowCaptureNeedsDesktopEffects,
                 recordWebcam, webcamDevice, webcamInputUrl, webcamInputWidth, webcamInputHeight, webcamInputFps,
                 webcamPlacement, webcamMirror, webcamShape, webcamBorder, webcamShadow, webcamBorderRgb, outputFile);
     }
@@ -56,8 +57,28 @@ public record RecorderConfig(
                 ffmpegPath, captureMode, region, captureMonitors, windowTarget, qualityPercent, fps,
                 recordSystemAudio, systemVolumePercent, recordMicrophone, microphoneDevice,
                 microphoneVolumePercent, microphoneNoiseSuppression, microphoneNoiseGate, microphoneNoiseGateDb,
-                separateAudioTracks, videoEncoder, showCursor, windowCaptureNeedsDesktopEffects,
+                separateAudioTracks, videoEncoder, fastGpuCapture, showCursor, windowCaptureNeedsDesktopEffects,
                 recordWebcam, webcamDevice, webcamInputUrl, webcamInputWidth, webcamInputHeight, webcamInputFps,
                 webcamPlacement, webcamMirror, webcamShape, webcamBorder, webcamShadow, webcamBorderRgb, file);
     }
+    public RecorderConfig withFastGpuCapture(boolean enabled) {
+        return new RecorderConfig(
+                ffmpegPath, captureMode, region, captureMonitors, windowTarget, qualityPercent, fps,
+                recordSystemAudio, systemVolumePercent, recordMicrophone, microphoneDevice,
+                microphoneVolumePercent, microphoneNoiseSuppression, microphoneNoiseGate, microphoneNoiseGateDb,
+                separateAudioTracks, videoEncoder, enabled, showCursor, windowCaptureNeedsDesktopEffects,
+                recordWebcam, webcamDevice, webcamInputUrl, webcamInputWidth, webcamInputHeight, webcamInputFps,
+                webcamPlacement, webcamMirror, webcamShape, webcamBorder, webcamShadow, webcamBorderRgb, outputFile);
+    }
+
+    public RecorderConfig withRegion(CaptureRegion newRegion) {
+        return new RecorderConfig(
+                ffmpegPath, captureMode, newRegion, captureMonitors, windowTarget, qualityPercent, fps,
+                recordSystemAudio, systemVolumePercent, recordMicrophone, microphoneDevice,
+                microphoneVolumePercent, microphoneNoiseSuppression, microphoneNoiseGate, microphoneNoiseGateDb,
+                separateAudioTracks, videoEncoder, fastGpuCapture, showCursor, windowCaptureNeedsDesktopEffects,
+                recordWebcam, webcamDevice, webcamInputUrl, webcamInputWidth, webcamInputHeight, webcamInputFps,
+                webcamPlacement, webcamMirror, webcamShape, webcamBorder, webcamShadow, webcamBorderRgb, outputFile);
+    }
+
 }

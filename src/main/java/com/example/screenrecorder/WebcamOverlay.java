@@ -13,7 +13,8 @@ import java.util.function.Consumer;
 public final class WebcamOverlay extends JWindow {
     private static final int EDGE = 9;
     private static final int MIN_W = 96;
-    private static final int MIN_H = 72;
+    private static final int MIN_H = 54;
+    private static final double ASPECT = 16.0 / 9.0;
 
     private final Consumer<WebcamPlacement> onChange;
     private Rectangle captureBounds;
@@ -53,16 +54,38 @@ public final class WebcamOverlay extends JWindow {
                 int dx = now.x - pressScreen.x;
                 int dy = now.y - pressScreen.y;
                 int x = pressBounds.x, y = pressBounds.y, w = pressBounds.width, h = pressBounds.height;
-                if (dragMode == ResizeMode.MOVE) { x += dx; y += dy; }
-                else {
-                    if (dragMode.west) { x += dx; w -= dx; }
-                    if (dragMode.east) w += dx;
-                    if (dragMode.north) { y += dy; h -= dy; }
-                    if (dragMode.south) h += dy;
+                if (dragMode == ResizeMode.MOVE) {
+                    x += dx;
+                    y += dy;
+                } else {
+                    int right = pressBounds.x + pressBounds.width;
+                    int bottom = pressBounds.y + pressBounds.height;
+                    if (dragMode.west) w = pressBounds.width - dx;
+                    if (dragMode.east) w = pressBounds.width + dx;
+                    if (dragMode.north) h = pressBounds.height - dy;
+                    if (dragMode.south) h = pressBounds.height + dy;
+
+                    double widthChange = Math.abs(w - pressBounds.width) / (double) Math.max(1, pressBounds.width);
+                    double heightChange = Math.abs(h - pressBounds.height) / (double) Math.max(1, pressBounds.height);
+                    if (dragMode.west || dragMode.east) {
+                        if ((dragMode.north || dragMode.south) && heightChange > widthChange) {
+                            h = Math.max(MIN_H, h);
+                            w = (int) Math.round(h * ASPECT);
+                        } else {
+                            w = Math.max(MIN_W, w);
+                            h = (int) Math.round(w / ASPECT);
+                        }
+                    } else {
+                        h = Math.max(MIN_H, h);
+                        w = (int) Math.round(h * ASPECT);
+                    }
+
+                    w = Math.max(MIN_W, w) & ~1;
+                    h = Math.max(MIN_H, h) & ~1;
+                    if (dragMode.west) x = right - w;
+                    if (dragMode.north) y = bottom - h;
                 }
-                if (w < MIN_W) { if (dragMode.west) x -= MIN_W - w; w = MIN_W; }
-                if (h < MIN_H) { if (dragMode.north) y -= MIN_H - h; h = MIN_H; }
-                Rectangle next = clampAbsolute(new Rectangle(x, y, w & ~1, h & ~1));
+                Rectangle next = clampAspectAbsolute(new Rectangle(x, y, w, h));
                 setBounds(next);
                 onChange.accept(placement());
             }
@@ -100,7 +123,20 @@ public final class WebcamOverlay extends JWindow {
         repaint();
     }
 
+    /**
+     * Changes the captured desktop bounds while keeping the preview at the same
+     * physical screen position whenever possible. This prevents the camera from
+     * jumping to another monitor when the selected monitor set changes.
+     */
     public void setCaptureBounds(Rectangle captureBounds) {
+        Rectangle absolute = getBounds();
+        this.captureBounds = new Rectangle(captureBounds);
+        setBounds(clampAspectAbsolute(absolute));
+        repaint();
+    }
+
+    /** Moves the preview together with a moving capture region, preserving its position inside the video. */
+    public void setCaptureBoundsKeepingPlacement(Rectangle captureBounds) {
         WebcamPlacement current = placement();
         this.captureBounds = new Rectangle(captureBounds);
         setPlacement(current);
@@ -111,7 +147,7 @@ public final class WebcamOverlay extends JWindow {
                 .clampTo(captureBounds.width, captureBounds.height);
     }
     public void setPlacement(WebcamPlacement placement) {
-        WebcamPlacement p = placement.clampTo(captureBounds.width, captureBounds.height);
+        WebcamPlacement p = normalizePlacement(placement);
         setBounds(captureBounds.x + p.x(), captureBounds.y + p.y(), p.width(), p.height());
         repaint();
     }
@@ -130,9 +166,41 @@ public final class WebcamOverlay extends JWindow {
         };
     }
 
-    private Rectangle clampAbsolute(Rectangle requested) {
-        int w = Math.min(Math.max(MIN_W, requested.width), captureBounds.width) & ~1;
-        int h = Math.min(Math.max(MIN_H, requested.height), captureBounds.height) & ~1;
+    private WebcamPlacement normalizePlacement(WebcamPlacement requested) {
+        int maxW = Math.max(MIN_W, captureBounds.width);
+        int maxH = Math.max(MIN_H, captureBounds.height);
+        int w = Math.max(MIN_W, requested.width());
+        int h = (int) Math.round(w / ASPECT);
+        if (h > maxH) {
+            h = maxH;
+            w = (int) Math.round(h * ASPECT);
+        }
+        if (w > maxW) {
+            w = maxW;
+            h = (int) Math.round(w / ASPECT);
+        }
+        w = Math.max(2, w & ~1);
+        h = Math.max(2, h & ~1);
+        int x = Math.max(0, Math.min(requested.x(), Math.max(0, captureBounds.width - w)));
+        int y = Math.max(0, Math.min(requested.y(), Math.max(0, captureBounds.height - h)));
+        return new WebcamPlacement(x, y, w, h);
+    }
+
+    private Rectangle clampAspectAbsolute(Rectangle requested) {
+        int maxW = Math.max(MIN_W, captureBounds.width);
+        int maxH = Math.max(MIN_H, captureBounds.height);
+        int w = Math.max(MIN_W, requested.width);
+        int h = (int) Math.round(w / ASPECT);
+        if (h > maxH) {
+            h = maxH;
+            w = (int) Math.round(h * ASPECT);
+        }
+        if (w > maxW) {
+            w = maxW;
+            h = (int) Math.round(w / ASPECT);
+        }
+        w = Math.max(2, w & ~1);
+        h = Math.max(2, h & ~1);
         int x = Math.max(captureBounds.x, Math.min(requested.x, captureBounds.x + captureBounds.width - w));
         int y = Math.max(captureBounds.y, Math.min(requested.y, captureBounds.y + captureBounds.height - h));
         return new Rectangle(x, y, w, h);
