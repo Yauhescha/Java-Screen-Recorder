@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.11.1
+
+- Fixed portable self-update extraction for jpackage runtime ZIPs.
+- Release ZIPs now contain file entries only, avoiding directory-entry incompatibilities with older updater builds.
+- Updater extraction now tolerates directory entries without trailing slashes and reports clear unpack/install errors.
+- Added retry logic when replacing the running application directory.
+- Replaced remaining Swing JOptionPane dialogs with readable dark themed dialogs.
+- Startup, update, recovery, monitor selection, low-disk, exit and library confirmation dialogs now use consistent colors and readable text.
+- Update errors now include a friendly summary plus technical details.
+
 ## 0.11.0
 
 ### Capture / smoothness

@@ -11,13 +11,19 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.security.MessageDigest;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.zip.ZipEntry;
-import java.util.zip.ZipInputStream;
+import java.util.zip.ZipFile;
 
 /** Lightweight update client backed by a release manifest hosted over HTTPS. */
 final class UpdateService {
@@ -26,6 +32,23 @@ final class UpdateService {
             .connectTimeout(Duration.ofSeconds(8))
             .followRedirects(HttpClient.Redirect.NORMAL)
             .build();
+
+    static String consumePreviousUpdateFailure() {
+        Path failureLog = Path.of(System.getProperty("java.io.tmpdir"), "JavaScreenRecorder-update-error.txt");
+        if (!Files.isRegularFile(failureLog)) return null;
+
+        try {
+            String text = Files.readString(failureLog, StandardCharsets.UTF_8).trim();
+            if (!text.isEmpty() && text.charAt(0) == '\uFEFF') {
+                text = text.substring(1).trim();
+            }
+            Files.deleteIfExists(failureLog);
+            return text.isBlank() ? "Unknown file replacement error." : text;
+        } catch (Exception ex) {
+            try { Files.deleteIfExists(failureLog); } catch (Exception ignored) {}
+            return "Could not read the previous update error: " + ex.getMessage();
+        }
+    }
 
     boolean isConfigured() {
         return !UpdateConfig.manifestUrl().isBlank();
@@ -76,9 +99,13 @@ final class UpdateService {
         content.add(label, BorderLayout.NORTH);
         content.add(bar, BorderLayout.CENTER);
         dialog.setContentPane(content);
-        dialog.setSize(430, 120);
+        dialog.setSize(460, 135);
         dialog.setResizable(false);
         dialog.setLocationRelativeTo(owner);
+        dialog.addNotify();
+        WindowsWindowStyler.apply(dialog);
+        var dialogIcon = AppIcon.load();
+        if (dialogIcon != null) dialog.setIconImage(dialogIcon);
 
         SwingWorker<Path, Void> worker = new SwingWorker<>() {
             @Override protected Path doInBackground() throws Exception {
@@ -120,11 +147,14 @@ final class UpdateService {
                     }
                     beforeExit.run();
                 } catch (Exception e) {
-                    Throwable cause = e.getCause() != null ? e.getCause() : e;
-                    log.accept("Update failed: " + cause.getMessage());
-                    JOptionPane.showMessageDialog(owner,
-                            "Could not install the update:\n" + cause.getMessage(),
-                            "Update failed", JOptionPane.ERROR_MESSAGE);
+                    Throwable cause = rootCause(e);
+                    String technical = cause.getClass().getSimpleName() + ": " +
+                            (cause.getMessage() == null ? cause.toString() : cause.getMessage());
+                    log.accept("Update failed: " + technical);
+                    DarkDialogs.error(owner,
+                            "Update failed",
+                            friendlyUpdateFailure(cause),
+                            technical + "\n\nThe current application was not replaced.");
                 }
             }
         };
@@ -138,7 +168,14 @@ final class UpdateService {
         }
 
         Path staging = Files.createTempDirectory("jsr-update-" + info.version() + "-");
-        extractZip(zip, staging);
+        try {
+            extractZip(zip, staging);
+        } catch (Exception ex) {
+            try { deleteRecursively(staging); } catch (Exception ignored) {}
+            throw new IllegalStateException(
+                    "The downloaded update is valid, but its ZIP package could not be unpacked. " +
+                    "No application files were changed.", ex);
+        }
 
         String entry = info.entryExe() == null || info.entryExe().isBlank()
                 ? "JavaScreenRecorder/JavaScreenRecorder.exe"
@@ -169,53 +206,145 @@ final class UpdateService {
     private static String portableUpdateScript(long pid, Path source, Path target) {
         String src = psQuote(source.toAbsolutePath().toString());
         String dst = psQuote(target.toAbsolutePath().toString());
-        String parent = psQuote(target.toAbsolutePath().getParent().toString());
         String name = target.getFileName().toString();
         String backup = psQuote(target.toAbsolutePath().getParent().resolve(name + ".update-backup").toString());
         String exe = psQuote(target.toAbsolutePath().resolve("JavaScreenRecorder.exe").toString());
+        String failureLog = psQuote(Path.of(System.getProperty("java.io.tmpdir"),
+                "JavaScreenRecorder-update-error.txt").toAbsolutePath().toString());
+
         return "$ErrorActionPreference = 'Stop'\r\n" +
                 "$pidToWait = " + pid + "\r\n" +
                 "$source = '" + src + "'\r\n" +
                 "$target = '" + dst + "'\r\n" +
-                "$parent = '" + parent + "'\r\n" +
                 "$backup = '" + backup + "'\r\n" +
                 "$exe = '" + exe + "'\r\n" +
+                "$failureLog = '" + failureLog + "'\r\n" +
                 "try { Wait-Process -Id $pidToWait -ErrorAction SilentlyContinue } catch {}\r\n" +
-                "Start-Sleep -Milliseconds 500\r\n" +
+                "Start-Sleep -Milliseconds 800\r\n" +
                 "try {\r\n" +
                 "  if (Test-Path -LiteralPath $backup) { Remove-Item -LiteralPath $backup -Recurse -Force }\r\n" +
-                "  Move-Item -LiteralPath $target -Destination $backup -Force\r\n" +
+                "  $moved = $false\r\n" +
+                "  for ($i = 0; $i -lt 20 -and -not $moved; $i++) {\r\n" +
+                "    try {\r\n" +
+                "      Move-Item -LiteralPath $target -Destination $backup -Force\r\n" +
+                "      $moved = $true\r\n" +
+                "    } catch {\r\n" +
+                "      if ($i -ge 19) { throw }\r\n" +
+                "      Start-Sleep -Milliseconds 500\r\n" +
+                "    }\r\n" +
+                "  }\r\n" +
                 "  New-Item -ItemType Directory -Path $target -Force | Out-Null\r\n" +
                 "  Copy-Item -Path (Join-Path $source '*') -Destination $target -Recurse -Force\r\n" +
                 "  if (-not (Test-Path -LiteralPath $exe)) { throw 'Updated executable is missing.' }\r\n" +
+                "  Remove-Item -LiteralPath $failureLog -Force -ErrorAction SilentlyContinue\r\n" +
                 "  Start-Process -FilePath $exe\r\n" +
                 "  Start-Sleep -Seconds 3\r\n" +
                 "  Remove-Item -LiteralPath $backup -Recurse -Force -ErrorAction SilentlyContinue\r\n" +
                 "} catch {\r\n" +
                 "  $message = $_.Exception.Message\r\n" +
+                "  try { Set-Content -LiteralPath $failureLog -Value $message -Encoding UTF8 } catch {}\r\n" +
                 "  if (Test-Path -LiteralPath $target) { Remove-Item -LiteralPath $target -Recurse -Force -ErrorAction SilentlyContinue }\r\n" +
                 "  if (Test-Path -LiteralPath $backup) { Move-Item -LiteralPath $backup -Destination $target -Force }\r\n" +
-                "  Add-Type -AssemblyName PresentationFramework -ErrorAction SilentlyContinue\r\n" +
-                "  [System.Windows.MessageBox]::Show('Java Screen Recorder update failed: ' + $message, 'Update failed') | Out-Null\r\n" +
                 "  if (Test-Path -LiteralPath $exe) { Start-Process -FilePath $exe }\r\n" +
                 "}\r\n";
     }
 
     private static void extractZip(Path zip, Path destination) throws IOException {
-        try (ZipInputStream zin = new ZipInputStream(new BufferedInputStream(Files.newInputStream(zip)))) {
-            ZipEntry entry;
-            while ((entry = zin.getNextEntry()) != null) {
-                Path out = destination.resolve(entry.getName()).normalize();
-                if (!out.startsWith(destination)) {
-                    throw new IOException("Unsafe path in update ZIP: " + entry.getName());
+        Files.createDirectories(destination);
+
+        try (ZipFile archive = new ZipFile(zip.toFile(), StandardCharsets.UTF_8)) {
+            List<? extends ZipEntry> entries = Collections.list(archive.entries());
+            Set<String> inferredDirectories = new HashSet<>();
+
+            // Infer directories from parent paths as well as ZipEntry flags. Some
+            // PowerShell-created ZIPs contain directory entries without a trailing '/',
+            // which makes ZipEntry.isDirectory() return false.
+            for (ZipEntry entry : entries) {
+                String normalized = normalizeZipName(entry.getName());
+                if (normalized.isBlank()) continue;
+
+                if (entry.isDirectory() || entry.getName().endsWith("/") || entry.getName().endsWith("\\")) {
+                    inferredDirectories.add(stripTrailingSlash(normalized));
                 }
-                if (entry.isDirectory()) {
-                    Files.createDirectories(out);
-                } else {
-                    if (out.getParent() != null) Files.createDirectories(out.getParent());
-                    Files.copy(zin, out, StandardCopyOption.REPLACE_EXISTING);
+
+                int slash = normalized.lastIndexOf('/');
+                while (slash > 0) {
+                    inferredDirectories.add(normalized.substring(0, slash));
+                    slash = normalized.lastIndexOf('/', slash - 1);
                 }
-                zin.closeEntry();
+            }
+
+            List<String> dirs = new ArrayList<>(inferredDirectories);
+            dirs.sort(Comparator.comparingInt(String::length));
+            for (String dir : dirs) {
+                Path out = safeZipPath(destination, dir);
+                Files.createDirectories(out);
+            }
+
+            for (ZipEntry entry : entries) {
+                String normalized = normalizeZipName(entry.getName());
+                if (normalized.isBlank()) continue;
+
+                String noSlash = stripTrailingSlash(normalized);
+                boolean directoryEntry = entry.isDirectory()
+                        || entry.getName().endsWith("/")
+                        || entry.getName().endsWith("\\")
+                        || inferredDirectories.contains(noSlash) && hasChildren(entries, noSlash);
+
+                if (directoryEntry) {
+                    Files.createDirectories(safeZipPath(destination, noSlash));
+                    continue;
+                }
+
+                Path out = safeZipPath(destination, normalized);
+                if (out.getParent() != null) Files.createDirectories(out.getParent());
+
+                if (Files.isDirectory(out)) {
+                    throw new IOException("ZIP entry is a file but the destination is a directory: " + normalized);
+                }
+
+                try (InputStream in = new BufferedInputStream(archive.getInputStream(entry))) {
+                    Files.copy(in, out, StandardCopyOption.REPLACE_EXISTING);
+                }
+            }
+        }
+    }
+
+    private static boolean hasChildren(List<? extends ZipEntry> entries, String parent) {
+        String prefix = parent.endsWith("/") ? parent : parent + "/";
+        for (ZipEntry other : entries) {
+            String n = normalizeZipName(other.getName());
+            if (n.startsWith(prefix)) return true;
+        }
+        return false;
+    }
+
+    private static String normalizeZipName(String name) {
+        if (name == null) return "";
+        String normalized = name.replace('\\', '/');
+        while (normalized.startsWith("/")) normalized = normalized.substring(1);
+        return normalized;
+    }
+
+    private static String stripTrailingSlash(String value) {
+        String result = value;
+        while (result.endsWith("/")) result = result.substring(0, result.length() - 1);
+        return result;
+    }
+
+    private static Path safeZipPath(Path destination, String name) throws IOException {
+        Path out = destination.resolve(name).normalize();
+        if (!out.startsWith(destination)) {
+            throw new IOException("Unsafe path in update ZIP: " + name);
+        }
+        return out;
+    }
+
+    private static void deleteRecursively(Path root) throws IOException {
+        if (root == null || !Files.exists(root)) return;
+        try (var stream = Files.walk(root)) {
+            for (Path p : stream.sorted(Comparator.reverseOrder()).toList()) {
+                Files.deleteIfExists(p);
             }
         }
     }
@@ -279,6 +408,46 @@ final class UpdateService {
         if (uri == null || !"https".equalsIgnoreCase(uri.getScheme())) {
             throw new IllegalArgumentException(what + " URL must use HTTPS.");
         }
+    }
+
+    private static Throwable rootCause(Throwable error) {
+        Throwable current = error;
+        while (current.getCause() != null && current.getCause() != current) {
+            current = current.getCause();
+        }
+        return current;
+    }
+
+    private static String friendlyUpdateFailure(Throwable cause) {
+        if (cause == null) {
+            return "The update could not be installed. The current version was not changed.";
+        }
+
+        String raw = cause.getMessage() == null ? cause.toString() : cause.getMessage();
+        String lower = raw.toLowerCase(Locale.ROOT);
+
+        if (cause instanceof FileAlreadyExistsException
+                || lower.contains("could not be unpacked")
+                || lower.contains("zip entry")
+                || lower.contains("java.base")) {
+            return "The update was downloaded and verified, but Windows could not unpack the application package. "
+                    + "The current version was not changed. This build includes a compatibility fix for future ZIP updates.";
+        }
+
+        if (cause instanceof AccessDeniedException || lower.contains("access is denied")) {
+            return "Windows denied access while updating the application. Close any open recorder/FFmpeg processes "
+                    + "and make sure the application folder is writable.";
+        }
+
+        if (lower.contains("sha-256") || lower.contains("sha256")) {
+            return "The downloaded update did not pass its integrity check, so it was discarded.";
+        }
+
+        if (lower.contains("http ")) {
+            return "The update package could not be downloaded from GitHub. Check your Internet connection and try again.";
+        }
+
+        return "The update could not be installed. The current version was not changed.";
     }
 
     static int compareVersions(String left, String right) {

@@ -13,27 +13,37 @@ public final class ScreenRecorderApp {
         // consistently even when different displays use 100/125/150/200% scaling.
         DpiAwareness.enablePerMonitorV2(startupLog::add);
 
+        AppTheme.apply();
+
         final String ffmpegPath;
         try {
             ffmpegPath = FfmpegBootstrap.resolve(startupLog::add);
         } catch (Exception e) {
-            SwingUtilities.invokeLater(() -> JOptionPane.showMessageDialog(
+            SwingUtilities.invokeLater(() -> DarkDialogs.error(
                     null,
-                    e.getMessage(),
                     "Java Screen Recorder - startup error",
-                    JOptionPane.ERROR_MESSAGE
+                    e.getMessage() == null ? e.toString() : e.getMessage()
             ));
             return;
         }
 
         SwingUtilities.invokeLater(() -> {
-            AppTheme.apply();
             RecorderFrame frame = new RecorderFrame(ffmpegPath);
             var icon = AppIcon.load();
             if (icon != null) frame.setIconImage(icon);
             startupLog.forEach(frame::appendStartupLog);
             frame.setVisible(true);
             WindowsWindowStyler.apply(frame);
+
+            String previousUpdateFailure = UpdateService.consumePreviousUpdateFailure();
+            if (previousUpdateFailure != null) {
+                DarkDialogs.error(
+                        frame,
+                        "Previous update failed",
+                        "The previous update could not replace the application files. The existing version was restored.",
+                        previousUpdateFailure);
+            }
+
             frame.checkForUpdatesAtStartup();
         });
     }

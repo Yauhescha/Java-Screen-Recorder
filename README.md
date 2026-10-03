@@ -1,4 +1,12 @@
-# Java Screen Recorder 0.11.0
+# Java Screen Recorder 0.11.1
+
+
+## 0.11.1 updater compatibility fix
+
+- Release ZIPs are generated with file entries only so older 0.10.x/0.11.0 updaters can unpack the bundled jpackage runtime correctly.
+- The in-app updater also has a tolerant ZIP extractor for future releases.
+- All application message/confirmation/error dialogs use the dark theme with readable foreground colors.
+- Failed update replacement is retried and, on future failures, the restored application shows the technical reason on next launch.
 
 Windows screen recorder written in Java 17/Swing with FFmpeg, WASAPI and Windows-native capture helpers.
 

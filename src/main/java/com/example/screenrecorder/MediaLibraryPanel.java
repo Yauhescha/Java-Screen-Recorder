@@ -205,10 +205,13 @@ final class MediaLibraryPanel extends JPanel {
     private void deleteSelected() {
         MediaItem item = selected();
         if (item == null) return;
-        int result = JOptionPane.showConfirmDialog(this,
+        int result = DarkDialogs.confirmYesNo(
+                this,
+                "Delete recording",
                 "Delete this file permanently?\n\n" + item.path().getFileName(),
-                "Delete recording", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
-        if (result != JOptionPane.YES_OPTION) return;
+                "Delete",
+                "Cancel");
+        if (result != 0) return;
         try {
             Files.deleteIfExists(item.path());
             log.accept("Deleted: " + item.path());

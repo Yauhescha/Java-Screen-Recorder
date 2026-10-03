@@ -1324,11 +1324,12 @@ public final class RecorderFrame extends JFrame {
         }
         message.append("\nRecover them to their selected output format now?");
 
-        Object[] options = {"Recover", "Keep for later", "Discard"};
-        int choice = JOptionPane.showOptionDialog(
-                this, message.toString(), "Recording recovery",
-                JOptionPane.DEFAULT_OPTION, JOptionPane.WARNING_MESSAGE,
-                null, options, options[0]);
+        int choice = DarkDialogs.options(
+                this,
+                "Recording recovery",
+                message.toString(),
+                new Color(255, 183, 77),
+                "Recover", "Keep for later", "Discard");
 
         if (choice == 0) {
             busy = true;
@@ -1345,9 +1346,10 @@ public final class RecorderFrame extends JFrame {
                         busy = false;
                         updateState();
                         append("Recovered " + recovered.size() + " unfinished recording(s).");
-                        JOptionPane.showMessageDialog(this,
-                                "Recovered " + recovered.size() + " recording(s) to:\n" + outputDir,
-                                "Recovery complete", JOptionPane.INFORMATION_MESSAGE);
+                        DarkDialogs.info(
+                                this,
+                                "Recovery complete",
+                                "Recovered " + recovered.size() + " recording(s) to:\n" + outputDir);
                     },
                     ex -> {
                         busy = false;
@@ -1789,14 +1791,14 @@ public final class RecorderFrame extends JFrame {
             return false;
         }
         if (free < DiskSpaceMonitor.WARNING_BYTES) {
-            int choice = JOptionPane.showConfirmDialog(
+            int choice = DarkDialogs.confirmYesNo(
                     this,
+                    "Low disk space",
                     "Only " + DiskSpaceMonitor.format(free) + " is free on the output drive.\n" +
                             "Long/high-quality recordings may run out of space. Start anyway?",
-                    "Low disk space",
-                    JOptionPane.YES_NO_OPTION,
-                    JOptionPane.WARNING_MESSAGE);
-            return choice == JOptionPane.YES_OPTION;
+                    "Start anyway",
+                    "Cancel");
+            return choice == 0;
         }
         return true;
     }
@@ -2144,24 +2146,7 @@ public final class RecorderFrame extends JFrame {
     }
 
     private void showInfoDialog(String titleText, String message) {
-        JDialog dialog = new JDialog(this, titleText, true);
-        JPanel root = new JPanel(new BorderLayout(10, 14));
-        root.setBackground(AppTheme.BG);
-        root.setBorder(new EmptyBorder(18, 20, 18, 20));
-        JLabel messageLabel = new JLabel("<html>" + message.replace("\n", "<br>") + "</html>");
-        messageLabel.setForeground(AppTheme.TEXT);
-        JButton ok = AppTheme.button("OK");
-        ok.addActionListener(e -> dialog.dispose());
-        JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT));
-        buttons.setOpaque(false);
-        buttons.add(ok);
-        root.add(messageLabel, BorderLayout.CENTER);
-        root.add(buttons, BorderLayout.SOUTH);
-        dialog.setContentPane(root);
-        dialog.setSize(430, 170);
-        dialog.setLocationRelativeTo(this);
-        WindowsWindowStyler.apply(dialog);
-        dialog.setVisible(true);
+        DarkDialogs.info(this, titleText, message);
     }
 
     private void exitForUpdate() {
@@ -2181,16 +2166,16 @@ public final class RecorderFrame extends JFrame {
             return;
         }
 
-        int result = JOptionPane.showConfirmDialog(
+        int result = DarkDialogs.confirmYesNoCancel(
                 this,
-                "Stop the current recording and save it before exiting?\n" +
-                        "Choosing No will intentionally discard this recording.",
                 "Exit",
-                JOptionPane.YES_NO_CANCEL_OPTION,
-                JOptionPane.QUESTION_MESSAGE);
+                "A recording is still active. What should happen before the application exits?",
+                "Stop and save",
+                "Discard recording",
+                "Cancel");
 
-        if (result == JOptionPane.CANCEL_OPTION || result == JOptionPane.CLOSED_OPTION) return;
-        if (result == JOptionPane.NO_OPTION) {
+        if (result == 2 || result == DarkDialogs.CLOSED) return;
+        if (result == 1) {
             session.abort();
             disposeResourcesAndExit();
             return;
@@ -2344,7 +2329,7 @@ public final class RecorderFrame extends JFrame {
     }
 
     private void warning(String message) {
-        showDarkMessage("Warning", message, new Color(255, 183, 77));
+        DarkDialogs.warning(this, "Warning", message);
     }
 
     private void error(Throwable e) {
@@ -2354,7 +2339,7 @@ public final class RecorderFrame extends JFrame {
         if (cause != null && cause.getMessage() != null && !cause.getMessage().equals(message)) {
             append("Cause: " + cause.getMessage());
         }
-        showDarkMessage("Error", message, AppTheme.RECORD);
+        DarkDialogs.error(this, "Error", message);
     }
 
     private String friendlyErrorMessage(Throwable e) {
@@ -2373,41 +2358,4 @@ public final class RecorderFrame extends JFrame {
         return raw;
     }
 
-    private void showDarkMessage(String title, String message, Color accent) {
-        JDialog dialog = new JDialog(this, title, true);
-        JPanel root = new JPanel(new BorderLayout(12, 14));
-        root.setBackground(AppTheme.BG);
-        root.setBorder(new EmptyBorder(18, 20, 16, 20));
-
-        JLabel badge = new JLabel(title.toUpperCase(java.util.Locale.ROOT));
-        badge.setForeground(accent);
-        badge.setFont(new Font("Segoe UI", Font.BOLD, 13));
-
-        JTextArea text = new JTextArea(message == null ? "" : message);
-        text.setEditable(false);
-        text.setLineWrap(true);
-        text.setWrapStyleWord(true);
-        text.setOpaque(true);
-        text.setBackground(AppTheme.PANEL_ALT);
-        text.setForeground(AppTheme.TEXT);
-        text.setFont(new Font("Segoe UI", Font.PLAIN, 13));
-        text.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(AppTheme.BORDER),
-                new EmptyBorder(10, 12, 10, 12)));
-
-        JButton ok = AppTheme.primaryButton("OK");
-        ok.addActionListener(ev -> dialog.dispose());
-        JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 0, 0));
-        buttons.setOpaque(false);
-        buttons.add(ok);
-
-        root.add(badge, BorderLayout.NORTH);
-        root.add(text, BorderLayout.CENTER);
-        root.add(buttons, BorderLayout.SOUTH);
-        dialog.setContentPane(root);
-        dialog.setSize(560, 210);
-        dialog.setLocationRelativeTo(this);
-        WindowsWindowStyler.apply(dialog);
-        dialog.setVisible(true);
-    }
 }

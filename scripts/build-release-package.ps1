@@ -37,8 +37,37 @@ if (-not (Test-Path (Join-Path $AppDir "JavaScreenRecorder.exe"))) {
 $ArchiveName = "JavaScreenRecorder-$Version-win-x64.zip"
 $ArchivePath = Join-Path $OutDir $ArchiveName
 
-# Compress-Archive with the application directory itself keeps JavaScreenRecorder/ as the ZIP root.
-Compress-Archive -Path $AppDir -DestinationPath $ArchivePath -CompressionLevel Optimal -Force
+# Build a compatibility-friendly ZIP with file entries only.
+# Older recorder updaters use java.util.zip.ZipInputStream and can misread
+# directory entries created by PowerShell Compress-Archive when a directory
+# entry has no trailing slash. Creating only file entries avoids that issue
+# while parent directories are recreated automatically during extraction.
+Add-Type -AssemblyName System.IO.Compression
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+
+if (Test-Path $ArchivePath) { Remove-Item $ArchivePath -Force }
+
+$archive = [System.IO.Compression.ZipFile]::Open(
+    $ArchivePath,
+    [System.IO.Compression.ZipArchiveMode]::Create
+)
+
+try {
+    Get-ChildItem -LiteralPath $AppDir -Recurse -File | ForEach-Object {
+        $relative = $_.FullName.Substring($AppDir.Length).TrimStart('\', '/')
+        $entryName = "JavaScreenRecorder/" + ($relative -replace '\\', '/')
+
+        [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
+            $archive,
+            $_.FullName,
+            $entryName,
+            [System.IO.Compression.CompressionLevel]::Optimal
+        ) | Out-Null
+    }
+}
+finally {
+    $archive.Dispose()
+}
 
 & (Join-Path $PSScriptRoot "make-update-manifest.ps1") `
     -Package $ArchivePath `

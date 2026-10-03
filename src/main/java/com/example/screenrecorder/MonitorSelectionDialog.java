@@ -13,8 +13,7 @@ final class MonitorSelectionDialog {
 
     static List<DisplayMonitor> show(Component parent, List<DisplayMonitor> monitors, List<DisplayMonitor> selected) {
         if (monitors == null || monitors.isEmpty()) {
-            JOptionPane.showMessageDialog(parent, "No Windows monitors were detected.", "Select monitors",
-                    JOptionPane.WARNING_MESSAGE);
+            DarkDialogs.warning(parent, "Select monitors", "No Windows monitors were detected.");
             return selected == null ? List.of() : selected;
         }
 
@@ -43,17 +42,16 @@ final class MonitorSelectionDialog {
         panel.add(hint, BorderLayout.NORTH);
         panel.add(list, BorderLayout.CENTER);
 
-        int answer = JOptionPane.showConfirmDialog(parent, panel, "Select monitor(s)",
-                JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
-        if (answer != JOptionPane.OK_OPTION) return selected == null ? List.of() : selected;
+        int answer = DarkDialogs.componentOptions(
+                parent, "Select monitor(s)", panel, AppTheme.ACCENT, "Use selected", "Cancel");
+        if (answer != 0) return selected == null ? List.of() : selected;
 
         List<DisplayMonitor> result = new ArrayList<>();
         for (JCheckBox box : boxes) {
             if (box.isSelected()) result.add((DisplayMonitor) box.getClientProperty("monitor"));
         }
         if (result.isEmpty()) {
-            JOptionPane.showMessageDialog(parent, "Select at least one monitor.", "Select monitors",
-                    JOptionPane.WARNING_MESSAGE);
+            DarkDialogs.warning(parent, "Select monitors", "Select at least one monitor.");
             return selected == null ? List.of() : selected;
         }
         return List.copyOf(result);
