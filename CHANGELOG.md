@@ -28,3 +28,7 @@ Each release now contains:
 - `JavaScreenRecorder-<version>-win-x64.zip` — application package for users.
 - `JavaScreenRecorderUpdater-<version>.exe` — small automatic-update bootstrapper.
 - `update.json` — update metadata and hashes for both files.
+
+### Build pipeline fix
+- Fixed Windows PowerShell release ZIP creation failing on `TrimStart('\\', '/')`.
+- `update.json` is now written as UTF-8 without BOM.

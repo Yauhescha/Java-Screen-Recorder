@@ -48,7 +48,9 @@ $payload = [ordered]@{
     payloadEntryExe = "JavaScreenRecorder/JavaScreenRecorder.exe"
     notes = $Notes
 }
-$payload | ConvertTo-Json -Depth 3 | Set-Content -Path $outPath -Encoding UTF8
+$json = $payload | ConvertTo-Json -Depth 3
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+[System.IO.File]::WriteAllText($outPath, $json, $utf8NoBom)
 
 Write-Host "Update manifest created: $outPath"
 Write-Host "Version: $Version"

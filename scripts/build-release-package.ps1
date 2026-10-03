@@ -48,7 +48,7 @@ $archive = [System.IO.Compression.ZipFile]::Open(
 )
 try {
     Get-ChildItem -LiteralPath $AppDir -Recurse -File | ForEach-Object {
-        $relative = $_.FullName.Substring($AppDir.Length).TrimStart('\\', '/')
+        $relative = $_.FullName.Substring($AppDir.Length).TrimStart([char[]]@([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar))
         $entryName = "JavaScreenRecorder/" + ($relative -replace '\\', '/')
         [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
             $archive,
