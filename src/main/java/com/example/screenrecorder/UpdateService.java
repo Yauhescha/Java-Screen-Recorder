@@ -143,7 +143,11 @@ final class UpdateService {
                     if ("zip".equals(normalizedType(info))) {
                         launchPortableZipUpdater(packageFile, info, log);
                     } else {
-                        new ProcessBuilder(packageFile.toAbsolutePath().toString()).start();
+                        ProcessBuilder updater = new ProcessBuilder(packageFile.toAbsolutePath().toString());
+                        updater.environment().put("JSR_UPDATE_TARGET", AppPaths.applicationDirectory().toAbsolutePath().normalize().toString());
+                        updater.environment().put("JSR_UPDATE_PARENT_PID", Long.toString(ProcessHandle.current().pid()));
+                        updater.directory(Path.of(System.getProperty("java.io.tmpdir")).toFile());
+                        updater.start();
                     }
                     beforeExit.run();
                 } catch (Exception e) {
@@ -197,10 +201,11 @@ final class UpdateService {
         Files.writeString(script, ps, StandardCharsets.UTF_8, StandardOpenOption.TRUNCATE_EXISTING);
         log.accept("Portable updater prepared. The application will restart after files are replaced.");
 
-        new ProcessBuilder(
+        ProcessBuilder updater = new ProcessBuilder(
                 "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
-                "-WindowStyle", "Hidden", "-File", script.toAbsolutePath().toString())
-                .start();
+                "-WindowStyle", "Hidden", "-File", script.toAbsolutePath().toString());
+        updater.directory(Path.of(System.getProperty("java.io.tmpdir")).toFile());
+        updater.start();
     }
 
     private static String portableUpdateScript(long pid, Path source, Path target) {

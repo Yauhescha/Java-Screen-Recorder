@@ -84,8 +84,8 @@ final class DarkDialogs {
         text.setLineWrap(true);
         text.setWrapStyleWord(true);
         text.setOpaque(true);
-        text.setBackground(AppTheme.PANEL_ALT);
-        text.setForeground(AppTheme.TEXT);
+        text.setBackground(new Color(22, 26, 33));
+        text.setForeground(Color.WHITE);
         text.setCaretColor(AppTheme.TEXT);
         text.setFont(new Font("Segoe UI", Font.PLAIN, 13));
         text.setBorder(new EmptyBorder(10, 12, 10, 12));
@@ -108,7 +108,7 @@ final class DarkDialogs {
         heading.setFont(new Font("Segoe UI", Font.BOLD, 14));
 
         JPanel bodyWrap = new JPanel(new BorderLayout());
-        bodyWrap.setBackground(AppTheme.PANEL_ALT);
+        bodyWrap.setBackground(new Color(22, 26, 33));
         bodyWrap.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createLineBorder(AppTheme.BORDER),
                 new EmptyBorder(2, 2, 2, 2)));
@@ -141,9 +141,10 @@ final class DarkDialogs {
                 KeyStroke.getKeyStroke("ESCAPE"),
                 JComponent.WHEN_IN_FOCUSED_WINDOW);
 
+        forceReadableColors(body);
         dialog.pack();
-        int width = Math.max(470, Math.min(700, dialog.getWidth()));
-        int height = Math.max(170, Math.min(520, dialog.getHeight()));
+        int width = Math.max(520, Math.min(760, dialog.getWidth()));
+        int height = Math.max(190, Math.min(560, dialog.getHeight()));
         dialog.setSize(width, height);
         dialog.setMinimumSize(new Dimension(440, 160));
         dialog.setLocationRelativeTo(owner);
@@ -156,4 +157,21 @@ final class DarkDialogs {
         dialog.setVisible(true);
         return result.get();
     }
+    private static void forceReadableColors(Component component) {
+        if (component instanceof JTextArea area) {
+            area.setForeground(Color.WHITE);
+            area.setBackground(new Color(22, 26, 33));
+            area.setCaretColor(Color.WHITE);
+        } else if (component instanceof JTextField field) {
+            field.setForeground(Color.WHITE);
+            field.setBackground(new Color(22, 26, 33));
+            field.setCaretColor(Color.WHITE);
+        } else if (component instanceof JLabel label) {
+            label.setForeground(AppTheme.TEXT);
+        }
+        if (component instanceof Container container) {
+            for (Component child : container.getComponents()) forceReadableColors(child);
+        }
+    }
+
 }

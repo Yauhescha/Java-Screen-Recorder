@@ -29,7 +29,7 @@ $OutDir = Join-Path $ProjectRoot "release-out"
 Remove-Item $OutDir -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
-$AppDir = Join-Path $ProjectRoot "dist\JavaScreenRecorder"
+$AppDir = Join-Path $ProjectRoot "dist\\JavaScreenRecorder"
 if (-not (Test-Path (Join-Path $AppDir "JavaScreenRecorder.exe"))) {
     throw "Packaged application was not found: $AppDir"
 }
@@ -37,26 +37,19 @@ if (-not (Test-Path (Join-Path $AppDir "JavaScreenRecorder.exe"))) {
 $ArchiveName = "JavaScreenRecorder-$Version-win-x64.zip"
 $ArchivePath = Join-Path $OutDir $ArchiveName
 
-# Build a compatibility-friendly ZIP with file entries only.
-# Older recorder updaters use java.util.zip.ZipInputStream and can misread
-# directory entries created by PowerShell Compress-Archive when a directory
-# entry has no trailing slash. Creating only file entries avoids that issue
-# while parent directories are recreated automatically during extraction.
+# File entries only: compatible with old Java ZipInputStream updater versions.
 Add-Type -AssemblyName System.IO.Compression
 Add-Type -AssemblyName System.IO.Compression.FileSystem
-
 if (Test-Path $ArchivePath) { Remove-Item $ArchivePath -Force }
 
 $archive = [System.IO.Compression.ZipFile]::Open(
     $ArchivePath,
     [System.IO.Compression.ZipArchiveMode]::Create
 )
-
 try {
     Get-ChildItem -LiteralPath $AppDir -Recurse -File | ForEach-Object {
-        $relative = $_.FullName.Substring($AppDir.Length).TrimStart('\', '/')
+        $relative = $_.FullName.Substring($AppDir.Length).TrimStart('\\', '/')
         $entryName = "JavaScreenRecorder/" + ($relative -replace '\\', '/')
-
         [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
             $archive,
             $_.FullName,
@@ -69,18 +62,32 @@ finally {
     $archive.Dispose()
 }
 
+$UpdaterPath = Join-Path $OutDir "JavaScreenRecorderUpdater-$Version.exe"
+& (Join-Path $PSScriptRoot "build-portable-updater.ps1") `
+    -Repository $Repository `
+    -Output $UpdaterPath
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path $UpdaterPath)) {
+    throw "Portable updater build failed."
+}
+
+# Sign the external updater too when a certificate is configured. This is optional.
+& (Join-Path $PSScriptRoot "sign-windows.ps1") `
+    -File $UpdaterPath `
+    -Required:$RequireSignature
+
 & (Join-Path $PSScriptRoot "make-update-manifest.ps1") `
     -Package $ArchivePath `
+    -Updater $UpdaterPath `
     -Repository $Repository `
     -Version $Version `
     -Notes $Notes `
-    -Output "release-out\update.json"
+    -Output "release-out\\update.json"
 if ($LASTEXITCODE -ne 0) { throw "Manifest generation failed." }
 
 Write-Host ""
 Write-Host "Release package ready:"
 Write-Host "  $ArchivePath"
+Write-Host "  $UpdaterPath"
 Write-Host "  $(Join-Path $OutDir 'update.json')"
 Write-Host ""
-Write-Host "A code-signing certificate is optional. If JSR_SIGN_PFX or JSR_SIGN_CERT_SHA1 is configured,"
-Write-Host "the launcher inside the ZIP is signed automatically."
+Write-Host "Users download the ZIP. Automatic updates use the small updater EXE."

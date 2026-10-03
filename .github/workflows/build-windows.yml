@@ -99,10 +99,15 @@ jobs:
           BUILD_VERSION: ${{ steps.version.outputs.version }}
         run: |
           $zip = ".\release-out\JavaScreenRecorder-$env:BUILD_VERSION-win-x64.zip"
+          $updater = ".\release-out\JavaScreenRecorderUpdater-$env:BUILD_VERSION.exe"
           $manifest = ".\release-out\update.json"
 
           if (-not (Test-Path $zip)) {
             throw "ZIP not found: $zip"
+          }
+
+          if (-not (Test-Path $updater)) {
+            throw "Updater EXE not found: $updater"
           }
 
           if (-not (Test-Path $manifest)) {
@@ -116,6 +121,7 @@ jobs:
           path: |
             release-out/JavaScreenRecorder-${{ steps.version.outputs.version }}-win-x64.zip
             release-out/update.json
+            release-out/JavaScreenRecorderUpdater-${{ steps.version.outputs.version }}.exe
           if-no-files-found: error
           retention-days: 14
 
@@ -132,6 +138,7 @@ jobs:
           files: |
             release-out/JavaScreenRecorder-${{ steps.version.outputs.version }}-win-x64.zip
             release-out/update.json
+            release-out/JavaScreenRecorderUpdater-${{ steps.version.outputs.version }}.exe
 
       - name: Build summary
         if: always()
@@ -143,4 +150,4 @@ jobs:
           "" | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
           "- Version: $env:BUILD_VERSION" | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
           "- Release tag: v$env:BUILD_VERSION" | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
-          "- Assets: ZIP + update.json" | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "- Assets: ZIP + updater EXE + update.json" | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8

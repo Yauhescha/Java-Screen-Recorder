@@ -140,3 +140,19 @@ When NVIDIA NVENC is selected, monitor capture and regions fully contained on a 
 The screen input queue is intentionally kept very small. A raw 2560x1600 BGRA frame is roughly 16 MiB, so large FFmpeg packet queues are inappropriate for real-time screen recording and can cause very high RAM use and delayed/stale frames.
 
 For a resizable region, the capture frame can be moved during recording. The recorder closes the current recoverable MKV segment and starts another at the new coordinates, then losslessly finalizes the segments together on Stop.
+
+## 0.11.2 update bootstrapper
+
+Public releases contain the normal portable application ZIP plus a small updater helper EXE. Users still download the ZIP manually. Automatic updates use the helper because it runs outside the recorder's application directory and can safely replace that directory after the old process exits.
+
+This also provides a compatibility bridge for 0.10.x releases: the old application understands the `packageUrl`, `packageType` and `sha256` fields and therefore can launch the new external helper without first being manually upgraded.
+
+A release contains:
+
+```text
+JavaScreenRecorder-0.11.2-win-x64.zip
+JavaScreenRecorderUpdater-0.11.2.exe
+update.json
+```
+
+The manifest points `packageUrl` at the updater helper and contains `payloadUrl` / `payloadSha256` for the actual application ZIP.
