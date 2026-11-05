@@ -1277,7 +1277,9 @@ public final class RecorderFrame extends JFrame {
         runTask(
                 () -> ffmpegService.detectNvenc(ffmpegPath, this::append),
                 status -> {
-                    nvencAvailable = status.selectable();
+                    // AUTO must never select NVENC merely because the encoder name exists in FFmpeg.
+                    // A real one-frame hardware encode has to succeed first.
+                    nvencAvailable = status.autoUsable();
                     VideoEncoder wanted = UserPreferences.videoEncoder();
                     if (status.selectable() && !comboContains(encoderBox, VideoEncoder.NVIDIA_NVENC)) {
                         encoderBox.insertItemAt(VideoEncoder.NVIDIA_NVENC, 1);
@@ -1289,7 +1291,7 @@ public final class RecorderFrame extends JFrame {
                         encoderStatus.setText("● NVENC ready — NVIDIA hardware encoding validated");
                         encoderStatus.setForeground(AppTheme.GOOD);
                     } else if (status.encoderPresent()) {
-                        encoderStatus.setText("NVENC found — probe failed; recording will retry it");
+                        encoderStatus.setText("NVENC listed — hardware probe failed; Auto uses CPU");
                         encoderStatus.setForeground(new Color(255, 183, 77));
                         encoderStatus.setToolTipText(status.detail());
                     } else {

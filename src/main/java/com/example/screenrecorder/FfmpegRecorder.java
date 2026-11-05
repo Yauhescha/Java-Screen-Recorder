@@ -8,6 +8,8 @@ import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -84,6 +86,9 @@ public final class FfmpegRecorder {
             processInput = new BufferedWriter(new OutputStreamWriter(
                     launchedProcess.getOutputStream(), StandardCharsets.UTF_8));
 
+            AtomicBoolean established = new AtomicBoolean(false);
+            AtomicReference<String> startupFailure = new AtomicReference<>();
+
             Thread ffmpegLogThread = new Thread(() -> {
                 try (var reader = launchedProcess.inputReader(StandardCharsets.UTF_8)) {
                     String line;
@@ -91,6 +96,10 @@ public final class FfmpegRecorder {
                         log.accept(line);
                         parseVideoStart(line, timeline, log);
                         parseStats(line);
+                        if (!established.get()) {
+                            String fatal = startupFailureFromLine(line);
+                            if (fatal != null) startupFailure.compareAndSet(null, fatal);
+                        }
                     }
                 } catch (IOException e) {
                     if (!stopping && launchedProcess.isAlive()) log.accept("FFmpeg log error: " + e.getMessage());
@@ -99,7 +108,6 @@ public final class FfmpegRecorder {
             ffmpegLogThread.setDaemon(true);
             ffmpegLogThread.start();
 
-            java.util.concurrent.atomic.AtomicBoolean established = new java.util.concurrent.atomic.AtomicBoolean(false);
             Thread watcher = new Thread(() -> {
                 try {
                     int exit = launchedProcess.waitFor();
@@ -116,9 +124,32 @@ public final class FfmpegRecorder {
             watcher.setDaemon(true);
             watcher.start();
 
-            Thread.sleep(350);
+            // Do not call the segment established after an arbitrary 350 ms. Some FFmpeg
+            // failures (notably a listed h264_nvenc encoder on a PC without nvcuda.dll)
+            // leave the process alive briefly while the filter graph winds down. During
+            // this startup window, watch stderr and the first encoded frame. This lets
+            // RecordingSession retry with GDI/CPU before the UI enters a healthy REC state.
+            long startupDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+            while (System.nanoTime() < startupDeadline) {
+                String fatal = startupFailure.get();
+                if (fatal != null) {
+                    if (launchedProcess.isAlive()) launchedProcess.destroyForcibly();
+                    throw new IllegalStateException("FFmpeg startup failed: " + fatal);
+                }
+                if (!launchedProcess.isAlive()) {
+                    throw new IllegalStateException("FFmpeg exited during startup. Check the technical log.");
+                }
+                if (lastStats.frames() > 0) break;
+                Thread.sleep(50);
+            }
+
+            String fatal = startupFailure.get();
+            if (fatal != null) {
+                if (launchedProcess.isAlive()) launchedProcess.destroyForcibly();
+                throw new IllegalStateException("FFmpeg startup failed: " + fatal);
+            }
             if (!launchedProcess.isAlive()) {
-                throw new IllegalStateException("FFmpeg exited immediately. Check the log.");
+                throw new IllegalStateException("FFmpeg exited during startup. Check the technical log.");
             }
             established.set(true);
         } catch (Exception e) {
@@ -128,6 +159,29 @@ public final class FfmpegRecorder {
             processInput = null;
             throw e;
         }
+    }
+
+    private static String startupFailureFromLine(String line) {
+        if (line == null || line.isBlank()) return null;
+        String lower = line.toLowerCase(java.util.Locale.ROOT);
+
+        if (lower.contains("cannot load nvcuda.dll"))
+            return "NVIDIA driver/CUDA library nvcuda.dll is unavailable";
+        if (lower.contains("cannot load nvencodeapi64") || lower.contains("nvencodeapi64.dll"))
+            return "NVIDIA NVENC driver library is unavailable";
+        if (lower.contains("no capable devices found") || lower.contains("no nvenc capable devices"))
+            return "no NVENC-capable NVIDIA device was found";
+        if (lower.contains("open encode session ex failed") || lower.contains("unsupported device"))
+            return "the NVIDIA encoder session could not be opened";
+        if (lower.contains("error while opening encoder"))
+            return "video encoder initialization failed";
+        if (lower.contains("could not open encoder before eof"))
+            return "video encoder could not be opened";
+        if (lower.contains("device not found") || lower.contains("device creation failed"))
+            return "screen capture device initialization failed";
+        if (lower.contains("error opening input") || lower.contains("could not find video device"))
+            return "capture input initialization failed";
+        return null;
     }
 
     private void parseStats(String line) {

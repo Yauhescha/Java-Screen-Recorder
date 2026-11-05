@@ -10,8 +10,14 @@ import java.util.function.Consumer;
 
 public final class FfmpegService {
     public record NvencStatus(boolean encoderPresent, boolean probeSucceeded, String detail) {
+        /** Encoder is listed by FFmpeg, so it may be exposed for an explicit manual retry. */
         public boolean selectable() {
             return encoderPresent;
+        }
+
+        /** AUTO mode must use NVENC only after a real hardware encode succeeded. */
+        public boolean autoUsable() {
+            return probeSucceeded;
         }
     }
 
@@ -75,8 +81,10 @@ public final class FfmpegService {
             detail = "h264_nvenc exists, but the validation probe timed out.";
         } else if (lower.contains("minimum required nvidia driver") || lower.contains("driver does not support")) {
             detail = "h264_nvenc exists, but the NVIDIA driver is too old for this FFmpeg build.";
+        } else if (lower.contains("cannot load nvcuda.dll") || lower.contains("nvcuda.dll")) {
+            detail = "h264_nvenc is listed, but nvcuda.dll (the NVIDIA display/CUDA driver) is unavailable on this PC. AUTO will use CPU H.264.";
         } else if (lower.contains("cannot load nvencodeapi64") || lower.contains("nvencodeapi64.dll")) {
-            detail = "h264_nvenc exists, but FFmpeg could not load the NVIDIA NVENC driver library.";
+            detail = "h264_nvenc exists, but FFmpeg could not load the NVIDIA NVENC driver library. AUTO will use CPU H.264.";
         } else if (lower.contains("no capable devices found") || lower.contains("no nvenc capable devices")) {
             detail = "h264_nvenc exists, but FFmpeg reported no NVENC-capable device.";
         } else if (lower.contains("open encode session ex failed") || lower.contains("unsupported device")) {
@@ -84,8 +92,8 @@ public final class FfmpegService {
         } else if (lower.contains("frame dimension less than the minimum supported value")) {
             detail = "h264_nvenc is available, but the diagnostic frame was too small for this NVIDIA encoder.";
         } else {
-            detail = "h264_nvenc exists, but the synthetic validation probe failed. " +
-                    "The recorder will still try NVENC on a real screen recording and fall back to CPU if needed.";
+            detail = "h264_nvenc exists, but the hardware validation probe failed. " +
+                    "AUTO will use CPU H.264; NVENC can still be selected manually for a retry.";
         }
 
         log.accept("NVENC: " + detail);

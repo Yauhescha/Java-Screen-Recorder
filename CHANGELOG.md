@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.11.3
+
+### NVENC / mixed-audio startup reliability
+
+- `Auto (NVENC if available)` now chooses NVENC only after the one-frame hardware probe actually succeeds. Merely having `h264_nvenc` listed in FFmpeg is no longer enough.
+- Detects `Cannot load nvcuda.dll` explicitly and reports that the NVIDIA driver/GPU path is unavailable; Auto immediately selects CPU H.264.
+- FFmpeg startup is monitored for encoder/capture fatal errors for up to two seconds instead of declaring success after a fixed 350 ms delay.
+- If NVENC is selected manually and fails during real startup, the recorder detects the failure before entering a healthy REC state and automatically retries with CPU H.264.
+- Encoder failures skip the pointless Desktop-Duplication-to-GDI retry and go directly to CPU fallback. Capture-backend failures still retry GDI normally.
+- Verified the `48 kHz stereo system audio + 48 kHz mono microphone -> amix -> AAC` filter graph independently; the reported second-laptop failure was caused by NVENC initialization, not by microphone amplitude or `amix`.
+
 ## 0.11.2
 
 ### Self-update reliability

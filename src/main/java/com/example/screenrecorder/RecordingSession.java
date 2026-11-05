@@ -165,8 +165,11 @@ public final class RecordingSession {
             recorder.start(segmentConfig, log, audioLevels, this::onSegmentStats, healthListener);
         } catch (Exception first) {
             Exception last = first;
+            boolean encoderFailure = looksLikeEncoderStartupFailure(first);
 
-            if (segmentConfig.fastGpuCapture()) {
+            // If the failure is clearly NVENC/encoder related, changing Desktop Duplication
+            // to GDI cannot fix it. Skip that redundant retry and go straight to CPU.
+            if (segmentConfig.fastGpuCapture() && !encoderFailure) {
                 log.accept("Desktop Duplication GPU capture could not start. Falling back to GDI capture automatically.");
                 baseConfig = baseConfig.withFastGpuCapture(false);
                 segmentConfig = baseConfig.withOutputFile(part);
@@ -195,6 +198,15 @@ public final class RecordingSession {
         log.accept("Recording segment started: " + part.getFileName() + " [" + baseConfig.videoEncoder() + "]");
     }
 
+
+    private static boolean looksLikeEncoderStartupFailure(Throwable error) {
+        String message = error == null || error.getMessage() == null
+                ? "" : error.getMessage().toLowerCase(java.util.Locale.ROOT);
+        return message.contains("nvenc")
+                || message.contains("nvcuda")
+                || message.contains("encoder")
+                || message.contains("video encoder");
+    }
 
     private void onSegmentStats(RecordingStats segmentStats) {
         RecordingStats combined = new RecordingStats(

@@ -156,3 +156,9 @@ update.json
 ```
 
 The manifest points `packageUrl` at the updater helper and contains `payloadUrl` / `payloadSha256` for the actual application ZIP.
+
+## 0.11.3 NVENC fallback
+
+`Auto (NVENC if available)` is conservative: NVENC is used only when FFmpeg successfully completes a real one-frame hardware encode. If FFmpeg lists `h264_nvenc` but the NVIDIA driver/GPU is unavailable (for example `Cannot load nvcuda.dll`), Auto uses CPU H.264. A manually forced NVENC attempt is also watched during startup and automatically retried with CPU H.264 if initialization fails.
+
+This is especially important on PCs that have a full FFmpeg build containing `h264_nvenc` but do not have a working NVIDIA GPU/driver.
