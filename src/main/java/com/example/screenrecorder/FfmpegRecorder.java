@@ -129,7 +129,7 @@ public final class FfmpegRecorder {
             // leave the process alive briefly while the filter graph winds down. During
             // this startup window, watch stderr and the first encoded frame. This lets
             // RecordingSession retry with GDI/CPU before the UI enters a healthy REC state.
-            long startupDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+            long startupDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
             while (System.nanoTime() < startupDeadline) {
                 String fatal = startupFailure.get();
                 if (fatal != null) {
@@ -139,7 +139,7 @@ public final class FfmpegRecorder {
                 if (!launchedProcess.isAlive()) {
                     throw new IllegalStateException("FFmpeg exited during startup. Check the technical log.");
                 }
-                if (lastStats.frames() > 0) break;
+                if (lastStats.frames() >= 2) break;
                 Thread.sleep(50);
             }
 
@@ -150,6 +150,10 @@ public final class FfmpegRecorder {
             }
             if (!launchedProcess.isAlive()) {
                 throw new IllegalStateException("FFmpeg exited during startup. Check the technical log.");
+            }
+            if (lastStats.frames() < 2) {
+                if (launchedProcess.isAlive()) launchedProcess.destroyForcibly();
+                throw new IllegalStateException("FFmpeg did not produce stable video frames within 10 seconds.");
             }
             established.set(true);
         } catch (Exception e) {
@@ -326,16 +330,25 @@ public final class FfmpegRecorder {
         List<String> filters = new ArrayList<>();
         String screenBase = null;
         String videoMap;
-        boolean directHardwareVideo = hardwareScreenInput && screenInputCount == 1 && webcamInputIndex == null;
+        // Only NVENC can consume the D3D11 frame directly. CPU x264 still uses
+        // Desktop Duplication, but downloads the frame through the filter graph.
+        boolean directHardwareVideo = hardwareScreenInput && screenInputCount == 1 &&
+                webcamInputIndex == null && c.videoEncoder() == VideoEncoder.NVIDIA_NVENC;
 
         if (screenInputCount == 1) {
             if (directHardwareVideo) {
-                // Official FFmpeg ddagrab -> h264_nvenc path: keep D3D11 frames on GPU.
-                videoMap = "0:v:0";
+                // Keep D3D11 frames on the GPU, but rebuild timestamps from the
+                // sequential frame number. Some Windows/NVIDIA combinations pause
+                // the DDA producer while NVENC initializes, leaving a multi-second
+                // wall-clock PTS gap at the beginning even though no useful frames
+                // were produced during that gap. setpts is metadata-only, so the
+                // D3D11 frame itself stays on the GPU.
+                filters.add("[0:v]setpts=N/(" + c.fps() + "*TB)[screenDda]");
+                videoMap = "[screenDda]";
             } else {
                 screenBase = "screenBase";
                 String prefix = hardwareScreenInput
-                        ? "[0:v]hwdownload,format=bgra,setpts=PTS-STARTPTS,"
+                        ? "[0:v]hwdownload,format=bgra,setpts=N/(" + c.fps() + "*TB),"
                         : "[0:v]setpts=PTS-STARTPTS,";
                 filters.add(prefix + "pad=ceil(iw/2)*2:ceil(ih/2)*2[" + screenBase + "]");
                 videoMap = "[" + screenBase + "]";
@@ -352,7 +365,7 @@ public final class FfmpegRecorder {
                 java.awt.Rectangle b = screenRects.get(i);
                 String label = "screen" + i;
                 String chain = hardwareScreenInput
-                        ? "[" + i + ":v]hwdownload,format=bgra,setpts=PTS-STARTPTS[" + label + "]"
+                        ? "[" + i + ":v]hwdownload,format=bgra,setpts=N/(" + c.fps() + "*TB)[" + label + "]"
                         : "[" + i + ":v]setpts=PTS-STARTPTS[" + label + "]";
                 filters.add(chain);
                 inputs.append("[").append(label).append("]");
@@ -495,7 +508,7 @@ public final class FfmpegRecorder {
         }
 
         if (c.videoEncoder() == VideoEncoder.NVIDIA_NVENC) addNvencSettings(cmd, c.qualityPercent(), directHardwareVideo);
-        else addCpuSettings(cmd, c.qualityPercent());
+        else addCpuSettings(cmd, c.qualityPercent(), c.fps());
 
         if (!sources.isEmpty()) {
             cmd.add("-c:a"); cmd.add("aac");
@@ -503,11 +516,11 @@ public final class FfmpegRecorder {
             cmd.add("-ar"); cmd.add("48000");
         }
 
-        // Force constant frame pacing in the saved stream. gdigrab timestamps can be
-        // slightly irregular under desktop load; CFR duplicates/drops only when needed
-        // instead of producing visibly jerky playback timing.
-        cmd.add("-fps_mode"); cmd.add("cfr");
-        cmd.add("-r"); cmd.add(String.valueOf(c.fps()));
+        // The capture source already owns frame pacing (`framerate` on DDA/GDI).
+        // Do not run a second CFR conversion here: output `-r` duplicates/drops frames
+        // immediately before encoding and can turn an overloaded 30 fps capture into
+        // a nominal 60 fps stream made of repeated frames. Preserve source timestamps.
+        cmd.add("-fps_mode"); cmd.add("passthrough");
         cmd.add("-flush_packets"); cmd.add("1");
         cmd.add("-f"); cmd.add("matroska");
         cmd.add(c.outputFile().toAbsolutePath().toString());
@@ -534,7 +547,6 @@ public final class FfmpegRecorder {
         cmd.add("-thread_queue_size"); cmd.add("8");
         cmd.add("-f"); cmd.add("gdigrab");
         cmd.add("-framerate"); cmd.add(String.valueOf(fps));
-        cmd.add("-use_wallclock_as_timestamps"); cmd.add("1");
         cmd.add("-draw_mouse"); cmd.add(showCursor ? "1" : "0");
         cmd.add("-offset_x"); cmd.add(String.valueOf(area.x));
         cmd.add("-offset_y"); cmd.add(String.valueOf(area.y));
@@ -546,7 +558,6 @@ public final class FfmpegRecorder {
         cmd.add("-thread_queue_size"); cmd.add("8");
         cmd.add("-f"); cmd.add("gdigrab");
         cmd.add("-framerate"); cmd.add(String.valueOf(fps));
-        cmd.add("-use_wallclock_as_timestamps"); cmd.add("1");
         cmd.add("-draw_mouse"); cmd.add(showCursor ? "1" : "0");
         cmd.add("-i"); cmd.add("hwnd=" + target.ffmpegHandle());
     }
@@ -587,10 +598,16 @@ public final class FfmpegRecorder {
 
     public boolean isMicrophoneMuted() { return microphoneMuted; }
 
-    private void addCpuSettings(List<String> cmd, int qualityPercent) {
+    private void addCpuSettings(List<String> cmd, int qualityPercent, int fps) {
         int crf = qualityToCrf(qualityPercent);
         cmd.add("-c:v"); cmd.add("libx264");
-        cmd.add("-preset"); cmd.add(qualityPercent >= 90 ? "veryfast" : "faster");
+
+        // A screen recorder must encode in real time. The previous `faster` preset
+        // can saturate laptop CPUs at 1080p/60 and FFmpeg then repeats stale frames.
+        // Prefer throughput over compression efficiency; CRF still controls quality.
+        String preset = fps >= 50 ? "superfast" : "veryfast";
+        cmd.add("-preset"); cmd.add(preset);
+        cmd.add("-tune"); cmd.add("zerolatency");
         cmd.add("-crf"); cmd.add(String.valueOf(crf));
         cmd.add("-pix_fmt"); cmd.add("yuv420p");
     }

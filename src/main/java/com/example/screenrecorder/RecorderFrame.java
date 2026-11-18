@@ -1041,8 +1041,11 @@ public final class RecorderFrame extends JFrame {
                 append("Window capture: mouse highlight/click effects are disabled so capture follows the selected window when it moves.");
             }
 
-            boolean fastGpuCapture = resolvedEncoder == VideoEncoder.NVIDIA_NVENC &&
-                    mode != CaptureMode.WINDOW &&
+            // Desktop Duplication is a capture backend, not an NVENC-only feature.
+            // Use it whenever DXGI output mapping is available. With CPU x264 the
+            // D3D11 frame is downloaded once before encoding; this is still much
+            // lighter and more consistently paced than GDI on many laptops.
+            boolean fastGpuCapture = mode != CaptureMode.WINDOW &&
                     (mode == CaptureMode.REGION || (!captureMonitors.isEmpty() &&
                             captureMonitors.stream().allMatch(m -> m.dxgiOutputIndex() >= 0)));
 

@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.11.5
+
+- Fixed multi-second frozen frames at the beginning of Desktop Duplication/NVENC recordings by normalizing DDA timestamps from frame sequence numbers.
+- Recording now stays in STARTING until FFmpeg has emitted stable encoded video frames (up to 10 seconds), instead of declaring REC while the encoder is still initializing.
+- Added asynchronous DDA -> NVENC pre-warm after NVENC detection to move expensive first-session initialization out of the recording start.
+- CPU fallback now keeps Desktop Duplication enabled instead of forcing GDI capture.
+
+## 0.11.4
+- Fixed visibly jerky recording on laptops that fall back from NVENC to CPU H.264.
+- Desktop Duplication capture is now used independently of NVENC and can feed CPU x264 through a D3D11 -> CPU download.
+- Removed the redundant output `-r`/CFR conversion that could manufacture duplicate frames.
+- Removed the GDI wall-clock timestamp override and preserve capture-source timing.
+- CPU x264 now uses real-time presets (`veryfast` at lower FPS, `superfast` at 50+ FPS) plus `zerolatency`.
+
 ## 0.11.3
 
 ### NVENC / mixed-audio startup reliability

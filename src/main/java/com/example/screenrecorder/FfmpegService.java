@@ -69,6 +69,26 @@ public final class FfmpegService {
                 "-f", "null", "-");
 
         if (!probe.timedOut() && probe.exitCode() == 0) {
+            // Warm the exact D3D11 Desktop Duplication -> NVENC path used by the
+            // recorder. On some NVIDIA laptops the first D3D11/NVENC interop
+            // session needs several seconds to initialize. Doing it here happens
+            // asynchronously while the UI is idle instead of losing the first
+            // seconds after the user presses Record.
+            ProcessResult ddaWarmup = run(ffmpegPath, 12,
+                    "-hide_banner", "-loglevel", "error",
+                    "-f", "lavfi", "-i",
+                    "ddagrab=output_idx=0:framerate=30:draw_mouse=0:video_size=640x360:offset_x=0:offset_y=0:dup_frames=1",
+                    "-frames:v", "3", "-an",
+                    "-c:v", "h264_nvenc", "-gpu", "any",
+                    "-preset", "p4", "-tune", "hq",
+                    "-rc", "vbr", "-multipass", "disabled", "-rc-lookahead", "0",
+                    "-cq", "23", "-b:v", "0",
+                    "-f", "null", "-");
+            if (!ddaWarmup.timedOut() && ddaWarmup.exitCode() == 0) {
+                log.accept("NVENC: Desktop Duplication/NVENC path pre-warmed successfully.");
+            } else {
+                log.accept("NVENC: hardware encoder works, but DDA pre-warm did not complete; recording will still retry/fallback normally.");
+            }
             String detail = "NVIDIA hardware H.264 encoding was validated.";
             log.accept("NVENC: " + detail);
             return new NvencStatus(true, true, detail);

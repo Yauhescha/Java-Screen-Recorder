@@ -184,7 +184,10 @@ public final class RecordingSession {
 
             if (last != null && segmentConfig.videoEncoder() == VideoEncoder.NVIDIA_NVENC) {
                 log.accept("NVENC could not start this recording. Falling back to CPU H.264 automatically.");
-                baseConfig = baseConfig.withVideoEncoder(VideoEncoder.CPU_X264).withFastGpuCapture(false);
+                // NVENC failure does not imply Desktop Duplication failure. Keep
+                // DDA enabled and download D3D11 frames once for libx264; this is
+                // usually smoother than forcing the whole capture back to GDI.
+                baseConfig = baseConfig.withVideoEncoder(VideoEncoder.CPU_X264);
                 segmentConfig = baseConfig.withOutputFile(part);
                 recorder.setMicrophoneMuted(microphoneMuted);
                 recorder.start(segmentConfig, log, audioLevels, this::onSegmentStats, healthListener);
